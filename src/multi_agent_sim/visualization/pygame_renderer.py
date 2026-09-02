@@ -10,7 +10,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional installatio
         "`pip install -e \".[visualization]\"`."
     ) from exc
 
-from multi_agent_sim.entities import Item, Robot
+from multi_agent_sim.entities import DeliveryDestination, Item, Robot
 from multi_agent_sim.world import SimulationWorld
 
 
@@ -23,6 +23,10 @@ class PygameRenderer:
     _ROBOT_EDGE = (29, 62, 133)
     _ITEM = (238, 139, 46)
     _ITEM_EDGE = (145, 77, 14)
+    _DESTINATION_EMPTY = (191, 174, 226)
+    _DESTINATION_WRONG = (241, 190, 92)
+    _DESTINATION_CORRECT = (104, 190, 133)
+    _DESTINATION_EDGE = (91, 70, 133)
     _TEXT = (24, 30, 40)
 
     def __init__(
@@ -71,8 +75,10 @@ class PygameRenderer:
         self._draw_header(world)
         self._draw_grid(world)
 
-        # Items are diamonds; robots are smaller circles. Drawing in this order
-        # leaves the diamond corners visible when the two types share a cell.
+        # Destinations are floor markers. Items are diamonds and robots are
+        # smaller circles, so later entities remain visible on the marker.
+        for destination in world.get_entities(DeliveryDestination):
+            self._draw_destination(world, destination)
         for item in world.get_entities(Item):
             self._draw_item(item)
         for robot in world.get_entities(Robot):
@@ -124,9 +130,19 @@ class PygameRenderer:
     def _draw_header(self, world: SimulationWorld) -> None:
         assert self._surface is not None
         assert self._font is not None
+        destinations = world.get_entities(DeliveryDestination)
+        delivered_count = sum(
+            any(
+                isinstance(occupant, Item)
+                and occupant.item_id == destination.target_item_id
+                for occupant in world.get_entities_at(destination.position)
+            )
+            for destination in destinations
+        )
         text = self._font.render(
             f"Step {world.timestep}   Robots: {len(world.get_entities(Robot))}   "
-            f"Items: {len(world.get_entities(Item))}",
+            f"Items: {len(world.get_entities(Item))}   "
+            f"Delivered: {delivered_count}/{len(destinations)}",
             True,
             self._TEXT,
         )
@@ -167,6 +183,41 @@ class PygameRenderer:
         pygame.draw.polygon(self._surface, self._ITEM, points)
         pygame.draw.polygon(self._surface, self._ITEM_EDGE, points, width=1)
 
+    def _draw_destination(
+        self,
+        world: SimulationWorld,
+        destination: DeliveryDestination,
+    ) -> None:
+        assert self._surface is not None
+        items = tuple(
+            occupant
+            for occupant in world.get_entities_at(destination.position)
+            if isinstance(occupant, Item)
+        )
+        if not items:
+            color = self._DESTINATION_EMPTY
+        elif any(item.item_id == destination.target_item_id for item in items):
+            color = self._DESTINATION_CORRECT
+        else:
+            color = self._DESTINATION_WRONG
+
+        x, y = destination.position
+        inset = max(1, round(self._cell_size * 0.1))
+        marker = pygame.Rect(
+            x * self._cell_size + inset,
+            self._header_height + y * self._cell_size + inset,
+            max(1, self._cell_size - 2 * inset),
+            max(1, self._cell_size - 2 * inset),
+        )
+        pygame.draw.rect(self._surface, color, marker, border_radius=3)
+        pygame.draw.rect(
+            self._surface,
+            self._DESTINATION_EDGE,
+            marker,
+            width=1,
+            border_radius=3,
+        )
+
     def _draw_robot(self, robot: Robot) -> None:
         assert self._surface is not None
         center = self._cell_center(robot.position)
@@ -187,4 +238,3 @@ class PygameRenderer:
             x * self._cell_size + self._cell_size // 2,
             self._header_height + y * self._cell_size + self._cell_size // 2,
         )
-

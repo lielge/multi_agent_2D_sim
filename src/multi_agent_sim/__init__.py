@@ -6,6 +6,7 @@ from .controllers import (
     ControllerFactory,
     ControllerFactoryContext,
     ControllerRegistry,
+    DeliveryDestinationObservation,
     ItemObservation,
     MultiAgentController,
     MultiAgentControllerAdapter,
@@ -17,7 +18,7 @@ from .controllers import (
     create_default_controller_registry,
     create_world_observation,
 )
-from .entities import Entity, Item, Position, Robot
+from .entities import DeliveryDestination, Entity, Item, Position, Robot
 from .generation import generate_random_world
 from .session import (
     InitialScenario,
@@ -40,6 +41,8 @@ __all__ = [
     "ControllerFactory",
     "ControllerFactoryContext",
     "ControllerRegistry",
+    "DeliveryDestination",
+    "DeliveryDestinationObservation",
     "Entity",
     "Item",
     "InitialScenario",

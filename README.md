@@ -2,8 +2,9 @@
 
 A small, modular foundation for multi-agent experiments on a discrete 2D grid.
 It provides deterministic world transitions, battery-aware movement, item
-pickup and drop, immutable controller observations, pluggable robot policies,
-and an optional interactive Pygame application.
+pickup and drop, reversible delivery destinations, immutable controller
+observations, pluggable robot policies, and an optional interactive Pygame
+application.
 
 ## Installation
 
@@ -42,22 +43,26 @@ python examples/basic_simulation.py
 
 The window opens on a setup screen. Choose the grid dimensions, robot and item
 counts, seed, maximum number of steps, and the nonnegative **Move**, **Pickup**,
-**Drop**, and **Wait** battery costs. You can generate robot positions or
+**Drop**, and **Wait** battery costs. One empty delivery destination is generated
+for every item. You can generate robot positions or
 configure each robot's position and initial battery manually. In either
 placement mode, each robot has its own controller selector. The built-ins are
 **Random** and the deterministic **Nearest Item** test controller; custom
 runnable registry entries appear in the same selectors automatically.
 
 In manual mode, select a robot row and click a cell in the preview to place it.
-Items are generated from the seed and never initially overlap a robot. Invalid
-or duplicate positions, batteries, costs, and other settings are shown inline
-and must be fixed before Start is enabled.
+Items and destinations are generated from the seed; robots, items, and
+destinations all start in distinct cells. A scenario therefore needs at least
+`robot count + 2 * item count` cells. Invalid or duplicate positions, batteries,
+costs, and other settings are shown inline and must be fixed before Start is
+enabled.
 
 The simulation starts paused. Its toolbar provides:
 
 - **Back** and **Forward** for exact one-step timeline navigation.
 - **Play/Pause** and a 1-30 steps-per-second rate slider.
-- The current step, recorded-history position, and robot/item counts.
+- The current step, recorded-history position, robot/item counts, and delivered
+  destination count.
 - A scrollable status panel with each robot's battery, selected controller,
   carried item, and latest controller warning.
 - **New Setup** to discard the current run and return to the setup screen while
@@ -91,6 +96,7 @@ Create and step a world programmatically:
 from multi_agent_sim import (
     Action,
     ActionBatteryCosts,
+    DeliveryDestination,
     Item,
     Robot,
     SimulationWorld,
@@ -108,6 +114,13 @@ world = SimulationWorld(
 )
 world.add_entity(Robot(robot_id="robot_1", position=(2, 3)))
 world.add_entity(Item(item_id="item_1", position=(3, 3)))
+world.add_entity(
+    DeliveryDestination(
+        destination_id="destination_1",
+        position=(6, 7),
+        target_item_id="item_1",
+    )
+)
 
 results = world.step({"robot_1": Action.MOVE_RIGHT})
 print(world.get_entity("robot_1").position)  # (3, 3)
@@ -140,18 +153,18 @@ world = generate_random_world(
 
 ## Architecture
 
-- `entities.py` defines the shared `Entity` abstraction and the initial
-  `Robot` and `Item` types. Entity positions and robot inventory are read-only
-  to callers; transitions go through the owning world so its indexes and
-  invariants remain correct.
+- `entities.py` defines the shared `Entity` abstraction and the `Robot`, `Item`,
+  and `DeliveryDestination` types. Entity positions and robot inventory are
+  read-only to callers; transitions go through the owning world so its indexes
+  and invariants remain correct.
 - `world.py` owns dimensions, entity registration, positional indexing,
   occupancy policy, battery charging, pickup/drop, simulation time, and batched
   state transitions.
 - `actions.py` contains the action vocabulary, immutable battery-cost
   configuration, and structured per-robot action results.
-- `controllers.py` defines immutable world/robot/item observation objects, the
-  per-robot controller protocol, the controller registry, the two built-in
-  policies, and the multi-agent adapter.
+- `controllers.py` defines immutable world, robot, item, and destination
+  observation objects, the per-robot controller protocol, the controller
+  registry, the two built-in policies, and the multi-agent adapter.
 - `session.py` constructs controllers, collects one action per robot, records
   controller warnings, and provides exact replay and rewind by rebuilding the
   initial world and replaying recorded action batches.
@@ -178,9 +191,10 @@ right, and `y` grows downward. Valid coordinates satisfy:
 0 <= y < height
 ```
 
-The default occupancy policy allows a robot and an item to share a cell. Two
-robots cannot share a cell, nor can two items. Random generation is stricter:
-all entities start in different cells.
+The default occupancy policy allows robots and items to occupy destination
+cells. Two robots, two items, or two destinations cannot share a cell. Random
+generation is stricter: all robots, items, and destinations start in different
+cells. Each generated `destination_n` targets `item_n`.
 
 `world.step(actions)` resolves movement from a snapshot of the step's starting
 state. Missing robot actions become `WAIT`. Out-of-bounds moves fail; all robots
@@ -214,6 +228,13 @@ item IDs remain reserved while off-grid, so another entity cannot reuse the ID.
 There is no item transfer action or direct manual Drop button; controllers issue
 `DROP` through the normal action interface.
 
+A destination is empty when its cell has no item, correctly fulfilled when its
+target item occupies the cell, and incorrectly occupied when another item is
+there. Correct and incorrect drops use the normal `DROP` behavior. Any item on
+the cell blocks a second drop, and picking the item up makes the destination
+empty again. The visualizers show empty destinations in purple, incorrect
+occupancy in amber, and correct delivery in green.
+
 Administrative setup or environment code may use `world.move_entity(...)`.
 Robot controllers should use the batched `step()` interface so multi-agent
 updates do not depend on iteration order.
@@ -224,7 +245,7 @@ The world owns truth and transitions but never decides actions. A
 `SimulationSession` gives every controller the same immutable
 `WorldObservation` for a timestep, calls controllers synchronously, and then
 submits the completed action batch to the world. Controllers never receive a
-mutable `SimulationWorld`, `Robot`, or `Item`.
+mutable `SimulationWorld` or live entity.
 
 The primary interface is deliberately small:
 
@@ -245,9 +266,10 @@ class MyController:
 ```
 
 `RandomController` samples `DROP` along with every other action, even when its
-inventory is empty. `NearestItemController` still waits after collecting an
-item because this version has no delivery destination. Custom controllers can
-choose `DROP` whenever their own task logic requires it.
+inventory is empty. `NearestItemController` is intentionally unchanged and
+still waits after collecting an item. Custom controllers can inspect
+`observation.destinations`, use `get_destination(...)`, and choose `DROP`
+whenever their task logic requires it.
 
 This same protocol can be implemented directly by a rule-based controller or
 planner, or by a thin adapter around an RL policy or neural network. Register a
@@ -311,7 +333,7 @@ session = SimulationSession(
 The package does not add an ML framework, training loop, HTTP or subprocess
 transport, or asynchronous inference. Those concerns stay inside custom
 controller adapters. Future extensions can add partial observations, rewards,
-transfer or delivery actions, or local belief state without coupling
+transfer actions, or local belief state without coupling
 decision-making to rendering or world mutation.
 
 ## Tests

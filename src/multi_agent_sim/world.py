@@ -13,7 +13,14 @@ from .actions import (
     ActionFailureReason,
     ActionResult,
 )
-from .entities import Entity, Item, Position, Robot, validate_position_shape
+from .entities import (
+    DeliveryDestination,
+    Entity,
+    Item,
+    Position,
+    Robot,
+    validate_position_shape,
+)
 
 EntityT = TypeVar("EntityT", bound=Entity)
 
@@ -110,6 +117,14 @@ class SimulationWorld:
             or carried_item_id in self._reserved_item_ids
         ):
             raise ValueError(f"duplicate entity ID: {carried_item_id!r}")
+        if isinstance(entity, DeliveryDestination) and any(
+            destination.target_item_id == entity.target_item_id
+            for destination in self.get_entities(DeliveryDestination)
+        ):
+            raise ValueError(
+                "duplicate delivery target item ID: "
+                f"{entity.target_item_id!r}"
+            )
         self._require_valid_position(entity.position)
 
         occupants = self._entities_at_unchecked(entity.position)

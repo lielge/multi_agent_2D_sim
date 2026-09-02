@@ -5,6 +5,7 @@ import unittest
 from multi_agent_sim import (
     Action,
     ActionFailureReason,
+    DeliveryDestination,
     Item,
     Robot,
     SimulationWorld,
@@ -81,6 +82,19 @@ class EntityRegistryTests(unittest.TestCase):
 
         self.assertEqual(len(self.world.get_entities()), 1)
         self.assertEqual(self.world.get_entities_at((1, 1)), ())
+
+    def test_duplicate_destination_target_is_rejected_and_removal_releases_it(self) -> None:
+        first = DeliveryDestination("destination_1", (0, 0), "item_1")
+        duplicate = DeliveryDestination("destination_2", (1, 0), "item_1")
+        self.world.add_entity(first)
+
+        with self.assertRaisesRegex(ValueError, "duplicate delivery target"):
+            self.world.add_entity(duplicate)
+        self.assertEqual(self.world.get_entities(DeliveryDestination), (first,))
+
+        self.world.remove_entity(first.destination_id)
+        self.world.add_entity(duplicate)
+        self.assertEqual(self.world.get_entities(DeliveryDestination), (duplicate,))
 
     def test_unknown_id_raises_key_error(self) -> None:
         with self.assertRaises(KeyError):
@@ -191,6 +205,64 @@ class StepTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(len(world.get_entities_at((1, 0))), 2)
 
+    def test_destination_allows_robot_and_item_overlap_and_reversible_delivery(self) -> None:
+        world = SimulationWorld(3, 1)
+        robot = Robot("robot_1", (0, 0))
+        item = Item("item_1", (1, 0))
+        destination = DeliveryDestination("destination_1", (2, 0), "item_1")
+        world.add_entity(robot)
+        world.add_entity(item)
+        world.add_entity(destination)
+
+        self.assertTrue(world.step({"robot_1": Action.MOVE_RIGHT})["robot_1"].success)
+        self.assertTrue(world.step({"robot_1": Action.PICK_UP})["robot_1"].success)
+        self.assertTrue(world.step({"robot_1": Action.MOVE_RIGHT})["robot_1"].success)
+        dropped = world.step({"robot_1": Action.DROP})["robot_1"]
+
+        self.assertTrue(dropped.success)
+        self.assertEqual(dropped.dropped_item_id, "item_1")
+        self.assertEqual(
+            tuple(type(entity) for entity in world.get_entities_at((2, 0))),
+            (DeliveryDestination, Item, Robot),
+        )
+
+        picked_up = world.step({"robot_1": Action.PICK_UP})["robot_1"]
+        self.assertTrue(picked_up.success)
+        self.assertEqual(picked_up.picked_up_item_id, "item_1")
+        self.assertEqual(world.get_entities_at((2, 0)), (destination, robot))
+
+    def test_wrong_item_can_be_dropped_but_blocks_the_target_item(self) -> None:
+        world = SimulationWorld(3, 1)
+        first = Robot("robot_1", (0, 0))
+        second = Robot("robot_2", (2, 0))
+        destination = DeliveryDestination("destination_1", (1, 0), "item_1")
+        world.add_entity(first)
+        world.add_entity(second)
+        world.add_entity(Item("item_2", (0, 0)))
+        world.add_entity(Item("item_1", (2, 0)))
+        world.add_entity(destination)
+
+        world.step({"robot_1": Action.PICK_UP, "robot_2": Action.PICK_UP})
+        world.step({"robot_1": Action.MOVE_RIGHT, "robot_2": Action.WAIT})
+        wrong_drop = world.step(
+            {"robot_1": Action.DROP, "robot_2": Action.WAIT}
+        )["robot_1"]
+        self.assertTrue(wrong_drop.success)
+
+        world.step({"robot_1": Action.MOVE_LEFT, "robot_2": Action.WAIT})
+        world.step({"robot_1": Action.WAIT, "robot_2": Action.MOVE_LEFT})
+        blocked = world.step({"robot_2": Action.DROP})["robot_2"]
+
+        self.assertFalse(blocked.success)
+        self.assertEqual(blocked.failure_reason, ActionFailureReason.OCCUPIED)
+        self.assertEqual(second.carried_item_id, "item_1")
+        self.assertEqual(
+            tuple(
+                entity.entity_id for entity in world.get_entities_at((1, 0))
+            ),
+            ("destination_1", "item_2", "robot_2"),
+        )
+
     def test_contested_empty_target_blocks_all_contenders(self) -> None:
         world = SimulationWorld(3, 1)
         left = Robot("robot_left", (0, 0))
@@ -284,4 +356,3 @@ class StepTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

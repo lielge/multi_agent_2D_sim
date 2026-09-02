@@ -9,6 +9,7 @@ from multi_agent_sim import (
     ActionBatteryCosts,
     ControllerFactoryContext,
     ControllerRegistry,
+    DeliveryDestination,
     InitialScenario,
     Item,
     MultiAgentControllerAdapter,
@@ -28,6 +29,7 @@ def world_snapshot(session: SimulationSession) -> tuple[object, ...]:
             entity.position,
             getattr(entity, "battery_level", None),
             getattr(entity, "carried_item_id", None),
+            getattr(entity, "target_item_id", None),
         )
         for entity in session.world.get_entities()
     )
@@ -70,8 +72,10 @@ class InitialScenarioTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first.num_robots, 3)
         self.assertEqual(first.num_items, 6)
+        self.assertEqual(first.num_destinations, 6)
         positions = tuple(configuration.position for configuration in first.robot_configurations)
         positions += first.item_positions
+        positions += first.delivery_destination_positions
         self.assertEqual(len(positions), len(set(positions)))
         self.assertEqual(
             tuple(configuration.battery_level for configuration in first.robot_configurations),
@@ -86,6 +90,16 @@ class InitialScenarioTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.item_id for item in world.get_entities(Item)),
             ("item_1", "item_2", "item_3", "item_4", "item_5", "item_6"),
+        )
+        self.assertEqual(
+            tuple(
+                (destination.destination_id, destination.target_item_id)
+                for destination in world.get_entities(DeliveryDestination)
+            ),
+            tuple(
+                (f"destination_{index}", f"item_{index}")
+                for index in range(1, 7)
+            ),
         )
 
     def test_manual_configuration_preserves_positions_and_batteries(self) -> None:
@@ -103,6 +117,10 @@ class InitialScenarioTests(unittest.TestCase):
                 configuration.position for configuration in robots
             )
         )
+        all_positions = tuple(configuration.position for configuration in robots)
+        all_positions += scenario.item_positions
+        all_positions += scenario.delivery_destination_positions
+        self.assertEqual(len(all_positions), len(set(all_positions)))
         world = scenario.create_world()
         created_robots = world.get_entities(Robot)
         self.assertEqual(
@@ -151,6 +169,19 @@ class InitialScenarioTests(unittest.TestCase):
 
         self.assertEqual(random.random(), expected)
 
+    def test_destination_sampling_preserves_seeded_robot_and_item_cells(self) -> None:
+        seed = 27
+        sampled = random.Random(seed).sample(range(20), 5)
+        expected_positions = tuple((index % 5, index // 5) for index in sampled)
+
+        scenario = create_initial_scenario(5, 4, 2, 3, seed=seed)
+        actual_positions = tuple(
+            configuration.position
+            for configuration in scenario.robot_configurations
+        ) + scenario.item_positions
+
+        self.assertEqual(actual_positions, expected_positions)
+
     def test_factory_validates_dimensions_counts_seed_and_capacity(self) -> None:
         invalid_calls = [
             (0, 2, 0, 0, 1),
@@ -158,6 +189,7 @@ class InitialScenarioTests(unittest.TestCase):
             (2, 2, -1, 0, 1),
             (2, 2, 0, True, 1),
             (2, 2, 0, 0, True),
+            (2, 2, 1, 2, 1),
             (2, 2, 3, 2, 1),
         ]
         for args in invalid_calls:
@@ -204,9 +236,62 @@ class InitialScenarioTests(unittest.TestCase):
     def test_direct_scenario_rejects_duplicate_or_overlapping_items(self) -> None:
         robot = RobotConfiguration((0, 0))
         with self.assertRaisesRegex(ValueError, "item positions must be unique"):
-            InitialScenario(3, 3, (robot,), ((1, 1), (1, 1)), 2)
+            InitialScenario(
+                3,
+                3,
+                (robot,),
+                ((1, 1), (1, 1)),
+                2,
+                delivery_destination_positions=((2, 1), (2, 2)),
+            )
         with self.assertRaisesRegex(ValueError, "must not overlap"):
-            InitialScenario(3, 3, (robot,), ((0, 0),), 2)
+            InitialScenario(
+                3,
+                3,
+                (robot,),
+                ((0, 0),),
+                2,
+                delivery_destination_positions=((2, 2),),
+            )
+
+    def test_direct_scenario_requires_one_destination_per_item(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one position"):
+            InitialScenario(
+                3,
+                3,
+                (),
+                ((0, 0),),
+                2,
+            )
+
+    def test_direct_scenario_validates_destination_positions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "destination positions must be unique"):
+            InitialScenario(
+                3,
+                3,
+                (),
+                ((0, 0), (1, 0)),
+                2,
+                delivery_destination_positions=((2, 0), (2, 0)),
+            )
+        with self.assertRaisesRegex(ValueError, "must not overlap"):
+            InitialScenario(
+                3,
+                3,
+                (),
+                ((0, 0),),
+                2,
+                delivery_destination_positions=((0, 0),),
+            )
+        with self.assertRaisesRegex(ValueError, "outside world bounds"):
+            InitialScenario(
+                3,
+                3,
+                (),
+                ((0, 0),),
+                2,
+                delivery_destination_positions=((3, 0),),
+            )
 
 
 class SimulationSessionTests(unittest.TestCase):
@@ -220,6 +305,7 @@ class SimulationSessionTests(unittest.TestCase):
             ),
             item_positions=((0, 4),),
             seed=19,
+            delivery_destination_positions=((4, 0),),
         )
 
     def test_initial_state_and_boundaries(self) -> None:
@@ -450,6 +536,7 @@ class SimulationSessionTests(unittest.TestCase):
             item_positions=((2, 0),),
             seed=4,
             action_battery_costs=ActionBatteryCosts(movement=2, pickup=3),
+            delivery_destination_positions=((1, 0),),
         )
         session = SimulationSession(scenario, max_steps=3)
 
@@ -503,6 +590,7 @@ class SimulationSessionTests(unittest.TestCase):
                 wait=0,
                 drop=4,
             ),
+            delivery_destination_positions=((2, 0),),
         )
         controller = ScriptedController()
         session = SimulationSession(
@@ -537,6 +625,11 @@ class SimulationSessionTests(unittest.TestCase):
             tuple((item.item_id, item.position) for item in dropped_items),
             (("item_1", (2, 0)),),
         )
+        destination = session.world.get_entities(DeliveryDestination)[0]
+        self.assertEqual(
+            (destination.position, destination.target_item_id),
+            ((2, 0), "item_1"),
+        )
         self.assertEqual(
             drop_results["robot_1"].dropped_item_id,  # type: ignore[index]
             "item_1",
@@ -558,6 +651,10 @@ class SimulationSessionTests(unittest.TestCase):
         self.assertEqual(before_drop.battery_level, 8.0)
         self.assertEqual(before_drop.carried_item_id, "item_1")
         self.assertEqual(session.world.get_entities(Item), ())
+        self.assertEqual(
+            session.world.get_entities(DeliveryDestination)[0].position,
+            (2, 0),
+        )
 
         replayed_results = session.step_forward()
         replayed_robot = session.world.get_entities(Robot)[0]

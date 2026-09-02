@@ -160,3 +160,37 @@ class Item(Entity):
 
     def __repr__(self) -> str:
         return f"Item(item_id={self.item_id!r}, position={self.position!r})"
+
+
+@dataclass(slots=True, init=False, eq=False)
+class DeliveryDestination(Entity):
+    """A fixed delivery location assigned to one target item."""
+
+    destination_id: str
+    target_item_id: str
+
+    def __init__(
+        self,
+        destination_id: str,
+        position: Position,
+        target_item_id: str,
+    ) -> None:
+        _validate_entity_id(destination_id, "destination_id")
+        _validate_entity_id(target_item_id, "target_item_id")
+        if destination_id == target_item_id:
+            raise ValueError("destination_id and target_item_id must be different")
+        Entity.__init__(self, position)
+        self.destination_id = destination_id
+        self.target_item_id = target_item_id
+
+    @property
+    def entity_id(self) -> str:
+        return self.destination_id
+
+    def __repr__(self) -> str:
+        return (
+            "DeliveryDestination("
+            f"destination_id={self.destination_id!r}, "
+            f"position={self.position!r}, "
+            f"target_item_id={self.target_item_id!r})"
+        )

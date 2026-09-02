@@ -13,8 +13,10 @@ try:
 except ModuleNotFoundError:
     pygame = None  # type: ignore[assignment]
 else:
+    from multi_agent_sim import DeliveryDestination, Item, SimulationWorld
     from multi_agent_sim.controllers import create_default_controller_registry
     from multi_agent_sim.visualization import (
+        PygameRenderer,
         PygameSimulationApp,
         run_pygame_application,
     )
@@ -378,6 +380,58 @@ class PygameApplicationTests(unittest.TestCase):
         self.assertEqual(self.app._format_status_number(94.5), "94.5")
         self.assertEqual(self.app._format_status_number(0.001), "0.001")
         self.assertFalse(self.app._format_status_number(1.00001).endswith("."))
+
+    def test_setup_capacity_includes_one_destination_per_item(self) -> None:
+        app = PygameSimulationApp(
+            width=2,
+            height=2,
+            num_robots=1,
+            num_items=2,
+            seed=3,
+            max_steps=4,
+            step_rate=5,
+        )
+
+        validation = app.setup.validate()
+
+        self.assertFalse(validation.valid)
+        self.assertIn("5 entities do not fit", validation.field_errors["num_items"])
+
+    def test_destination_markers_show_empty_correct_and_wrong_states(self) -> None:
+        world = SimulationWorld(3, 1)
+        world.add_entity(DeliveryDestination("destination_1", (0, 0), "item_1"))
+        world.add_entity(DeliveryDestination("destination_2", (1, 0), "item_2"))
+        world.add_entity(DeliveryDestination("destination_3", (2, 0), "item_3"))
+        world.add_entity(Item("item_2", (1, 0)))
+        world.add_entity(Item("item_4", (2, 0)))
+        grid = pygame.Rect(20, 20, 180, 60)
+
+        self.app._draw_world(world, grid)
+
+        self.assertEqual(self.app.surface.get_at((30, 30))[:3], (191, 174, 226))
+        self.assertEqual(self.app.surface.get_at((90, 30))[:3], (104, 190, 133))
+        self.assertEqual(self.app.surface.get_at((150, 30))[:3], (241, 190, 92))
+
+        renderer = PygameRenderer(cell_size=60, fps=5)
+        try:
+            renderer.render(world)
+        finally:
+            renderer.close()
+
+    def test_simulation_status_counts_correctly_delivered_items(self) -> None:
+        self.app.process_event(self._click(self.app._start_button.rect.center))
+        session = self.app.session
+        assert session is not None
+        destination = session.world.get_entities(DeliveryDestination)[0]
+        session.world.move_entity(destination.target_item_id, destination.position)
+
+        with patch(
+            "multi_agent_sim.visualization.pygame_app.draw_text"
+        ) as draw_text_mock:
+            self.app._draw_simulation()
+
+        rendered_text = tuple(call.args[2] for call in draw_text_mock.call_args_list)
+        self.assertIn("Robots: 3   Items: 4   Delivered: 1/4", rendered_text)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ The main code areas and the problems they solve are:
 | Code area | Responsibility | Problem solved |
 |---|---|---|
 | `src/multi_agent_sim/actions.py` | Defines actions, battery-cost configuration, failure categories, and transition results. | Gives every caller one stable transition vocabulary and result format. |
-| `src/multi_agent_sim/entities.py` | Defines `Entity`, `Robot`, `Item`, positions, battery, and one-item inventory. | Keeps entity identity and mutable state consistent under world ownership. |
+| `src/multi_agent_sim/entities.py` | Defines `Entity`, `Robot`, `Item`, `DeliveryDestination`, positions, battery, and one-item inventory. | Keeps entity identity and mutable state consistent under world ownership. |
 | `src/multi_agent_sim/world.py` | Owns the authoritative state, occupancy index, collision rules, battery accounting, pickup/drop, and batched transitions. | Makes a multi-robot tick deterministic and prevents GUI/controller code from mutating only part of the state. |
 | `src/multi_agent_sim/controllers.py` | Defines immutable observations, per-robot and joint controller protocols, registry/factories, and built-in policies. | Lets rule-based, planning, learned, or team policies plug in without depending on `SimulationWorld` internals. |
 | `src/multi_agent_sim/session.py` | Defines initial scenarios, constructs controllers, asks for actions, records history/warnings, and rebuilds on rewind. | Bridges controllers to the forward-only world while providing exact Back/Forward navigation. |
@@ -60,7 +60,7 @@ flowchart TD
     Controller["RobotController /<br/>MultiAgentControllerAdapter"]
     Observation["WorldObservation<br/>immutable DTO"]
     World["SimulationWorld<br/>authoritative transitions"]
-    Domain["Action / ActionResult<br/>Robot / Item / battery costs"]
+    Domain["Action / ActionResult<br/>Robot / Item / Destination / battery costs"]
     Renderer["PygameRenderer<br/>standalone read-only renderer"]
 
     CLI -->|visual defaults| App
@@ -94,7 +94,7 @@ caller/UI
   -> dict[str, ActionResult]
 ```
 
-Controllers do not receive a `SimulationWorld`, live `Robot` or `Item`
+Controllers do not receive a `SimulationWorld` or live entity
 objects, the session, or an `ActionResult`. They can observe the effect of a
 previous choice only in the next `WorldObservation`.
 
@@ -118,6 +118,9 @@ previous choice only in the next `WorldObservation`.
 - `Robot` adds a stable ID, nonnegative finite battery, and a read-only
   `carried_item_id`. Inventory capacity is one ID.
 - `Item` is passive and contains only an ID and a position.
+- `DeliveryDestination` is a persistent floor marker containing a globally
+  unique destination ID, position, and target item ID. Its empty, correct, or
+  incorrect status is derived from the item occupying its cell.
 
 #### World
 
@@ -130,8 +133,9 @@ previous choice only in the next `WorldObservation`.
 - dimensions, an `OccupancyPolicy`, immutable action costs, and `_timestep`.
 
 Its public query methods return entities sorted lexicographically by entity
-ID. The default `TypeExclusiveOccupancyPolicy` allows one robot and one item
-to share a cell, but rejects two robots or two items in one cell.
+ID. The default `TypeExclusiveOccupancyPolicy` allows robots and items to
+occupy a destination cell, but rejects two entities of the same type in one
+cell. Only one destination may target a given item ID.
 
 `add_entity()`, `remove_entity()`, and `move_entity()` are administrative APIs.
 They maintain registry and occupancy invariants, but `move_entity()` does not
@@ -144,20 +148,24 @@ charge battery or advance simulation time. Robot behavior should normally use
   `controller_key`. Tuple order determines automatic IDs `robot_1`,
   `robot_2`, and so on.
 - `InitialScenario` is the immutable, validated initial specification. Its
-  `create_world()` method always creates fresh entities at timestep zero.
+  semantically required `delivery_destination_positions` contains exactly one
+  position per item; tuple order maps `destination_n` to `item_n`.
+  `create_world()` always creates fresh entities at timestep zero.
 - `create_initial_scenario()` uses a local `random.Random(seed)`. In random
   mode it samples unique robot and item cells. In manual mode it preserves
-  robot positions/batteries and samples item cells excluding robot cells.
+  robot positions/batteries and samples item cells excluding robot cells. It
+  then samples one destination per item from the remaining cells. Capacity is
+  therefore `robots + 2 * items`.
 - `SimulationSession` owns the current world, controller instances, action
   history, controller-warning history, history cursor, rate, maximum steps,
   and play state.
 
 #### Controllers
 
-- `RobotObservation`, `ItemObservation`, and `WorldObservation` are frozen,
-  slotted DTOs. `WorldObservation.from_world()` copies public state into
-  sorted tuples and includes dimensions, world timestep, and
-  `ActionBatteryCosts`.
+- `RobotObservation`, `ItemObservation`, `DeliveryDestinationObservation`, and
+  `WorldObservation` are frozen, slotted DTOs. `WorldObservation.from_world()`
+  copies public state into sorted tuples and includes dimensions, world
+  timestep, and `ActionBatteryCosts`.
 - `RobotController` is a runtime-checkable structural protocol whose only
   method is `choose_action(observation, robot_id) -> Action`.
 - `ControllerRegistry` maps a stable key and display name to a factory. Each
@@ -208,6 +216,11 @@ The visual branch continues as follows:
 7. Play or Forward eventually calls `session.step_forward()`. Rendering reads
    `session.world`; it never advances the world itself.
 
+Both renderers draw destinations beneath items and robots: purple means empty,
+amber means occupied by the wrong item, and green means the target item is
+present. The playback status also reports fulfilled destinations as a
+delivered/total count.
+
 `src/multi_agent_sim/__init__.py` re-exports the public core/controller/session
 API without importing Pygame. Visualization is opt-in through
 `src/multi_agent_sim/visualization/__init__.py`.
@@ -242,9 +255,10 @@ current step's controller-warning mapping.
   though Python treats `bool` as an `int` subclass.
 - `(0, 0)` is top-left, `x` grows right, and `y` grows down.
 - Bounds are `0 <= x < width` and `0 <= y < height`.
-- Entity IDs are global: a robot and item cannot share the same ID.
+- Entity IDs are global across robots, items, and delivery destinations.
 - Initial scenario generation places every entity on a unique cell, which is
-  stricter than the default runtime policy allowing robot-item overlap.
+  stricter than the default runtime policy allowing robot/item/destination
+  overlap.
 - Entity queries and transition application use lexicographic ID order, so
   `robot_10` sorts before `robot_2`.
 
@@ -308,6 +322,12 @@ robot-ID-order dependent.
 The dropped object is a new Python `Item` instance, not the object removed by
 pickup. This is currently harmless because `Item` has only ID and position,
 but it matters if item subclasses or metadata are added later.
+
+Delivery uses these existing pickup/drop rules. A destination is empty with no
+item on its cell, fulfilled when the occupying item ID equals its
+`target_item_id`, and incorrectly occupied otherwise. Either item blocks a
+second drop, and a later pickup empties the destination. Destinations remain
+registered throughout these transitions.
 
 ### Representative core operation: pickup
 
@@ -468,13 +488,15 @@ scenario = InitialScenario(
     item_positions=((2, 0),),
     seed=4,
     action_battery_costs=ActionBatteryCosts(movement=2, pickup=3),
+    delivery_destination_positions=((1, 0),),
 )
 session = SimulationSession(scenario, max_steps=3)
 ```
 
 Construction creates `robot_1` at `(0, 0)` with battery `7`, `item_1` at
-`(2, 0)`, and a `NearestItemController` from the default registry. The session
-is paused at cursor/timestep zero.
+`(2, 0)`, `destination_1` at `(1, 0)` targeting `item_1`, and a
+`NearestItemController` from the default registry. The session is paused at
+cursor/timestep zero.
 
 The three calls have this order and state effect:
 
@@ -701,8 +723,8 @@ unless marked **inference**:
   branch nor the Pygame app calls it. The active demo path uses
   `InitialScenario` plus `SimulationSession`.
 - `PygameRenderer` is public but is not used by `PygameSimulationApp` or the
-  example, and has no direct repository test. It is a standalone embedding
-  path. The interactive app has separate world-drawing code.
+  example. It is a standalone embedding path with separate world-drawing code;
+  destination rendering is smoke-tested alongside the application.
 - `run_pygame_application()` is a public, tested convenience wrapper, but the
   example constructs `PygameSimulationApp` directly.
 - `create_world_observation()` is public and tested, but session production
@@ -712,8 +734,9 @@ unless marked **inference**:
 - Headless CLI execution has no controller-selection or custom-registry flag,
   so it always uses default Random controllers. Custom headless controllers
   require programmatic construction.
-- `NearestItemController` intentionally waits forever after pickup. It has no
-  delivery target and never chooses `DROP`.
+- `NearestItemController` intentionally remains item-only: it waits forever
+  after pickup and never chooses `DROP`, even though destinations are visible
+  in its observation.
 - The session stores action and controller-warning history but not
   `ActionResult` history. Pygame shows controller warnings, not ordinary world
   failure reasons; an embedding caller must inspect each `step_forward()`
@@ -738,7 +761,7 @@ unless marked **inference**:
   general rollback around arbitrary policy code. **Inference:** a custom
   occupancy policy that raises during a later robot's Drop can leave mutations
   already applied for earlier robots while the tick itself does not complete.
-- `robot_id` and `item_id` attributes are publicly writable even while the
+- `robot_id`, `item_id`, and `destination_id` attributes are publicly writable even while the
   world's registry is keyed by their old value. **Inference:** changing an ID
   in place can desynchronize registry/occupancy invariants; callers should
   treat registered IDs as immutable.
@@ -755,7 +778,7 @@ unless marked **inference**:
 | `examples/basic_simulation.py` | Only executable entry; CLI parsing and visual/headless composition. | Add CLI settings, controller-loading support, or alter demo defaults/summary. |
 | `src/multi_agent_sim/__init__.py` | Public core/controller/session re-exports. | Expose or retire a supported public API without importing Pygame into the core. |
 | `src/multi_agent_sim/actions.py` | `Action`, deltas, costs, failures, and `ActionResult`. | Add or change actions, charging categories, or result data. |
-| `src/multi_agent_sim/entities.py` | Entity ownership, positions, robot battery/inventory, and items. | Add entity state/types or change inventory capacity while preserving owner guards. |
+| `src/multi_agent_sim/entities.py` | Entity ownership, positions, robot battery/inventory, items, and delivery destinations. | Add entity state/types or change inventory capacity while preserving owner guards. |
 | `src/multi_agent_sim/world.py` | Entity registry, occupancy, transition resolution, battery, pickup/drop, and timestep. | Change simulation rules, occupancy behavior, conflicts, or action effects. |
 | `src/multi_agent_sim/controllers.py` | Observation DTOs, protocols, registry, built-ins, stable seeding, and joint adapter. | Add observable state, controller types, factory behavior, or team-policy integration. |
 | `src/multi_agent_sim/session.py` | Scenario validation/creation, controller construction, action generation, history, replay, and playback state. | Change initialization, controller orchestration, timeline behavior, checkpoints, or error recording. |

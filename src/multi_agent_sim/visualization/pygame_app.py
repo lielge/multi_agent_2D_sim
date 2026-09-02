@@ -14,7 +14,7 @@ from multi_agent_sim.controllers import (
     ControllerRegistry,
     create_default_controller_registry,
 )
-from multi_agent_sim.entities import Item, Robot
+from multi_agent_sim.entities import DeliveryDestination, Item, Robot
 from multi_agent_sim.session import (
     InitialScenario,
     RobotConfiguration,
@@ -35,6 +35,11 @@ from .widgets import (
 
 
 RobotMode = Literal["random", "manual"]
+
+_DESTINATION_EMPTY = (191, 174, 226)
+_DESTINATION_WRONG = (241, 190, 92)
+_DESTINATION_CORRECT = (104, 190, 133)
+_DESTINATION_EDGE = (91, 70, 133)
 
 
 def _integer_characters(value: str) -> bool:
@@ -313,7 +318,7 @@ class InitializationState:
         counts_ready = "num_robots" in values and "num_items" in values
         if dimensions_ready and counts_ready:
             capacity = values["width"] * values["height"]
-            total = values["num_robots"] + values["num_items"]
+            total = values["num_robots"] + 2 * values["num_items"]
             if total > capacity:
                 message = f"{total} entities do not fit in {capacity} grid cells."
                 result.field_errors["num_robots"] = message
@@ -1327,6 +1332,15 @@ class PygameSimulationApp:
         cell_width = self._preview_grid.width / scenario.width
         cell_height = self._preview_grid.height / scenario.height
 
+        for position in scenario.delivery_destination_positions:
+            self._draw_destination_marker(
+                position,
+                self._preview_grid,
+                cell_width,
+                cell_height,
+                _DESTINATION_EMPTY,
+            )
+
         for position in scenario.item_positions:
             center = self._position_center(position, self._preview_grid, cell_width, cell_height)
             radius = max(2, round(min(cell_width, cell_height) * 0.34))
@@ -1394,6 +1408,15 @@ class PygameSimulationApp:
         world = session.world
         robot_count = len(world.get_entities(Robot))
         item_count = len(world.get_entities(Item))
+        destinations = world.get_entities(DeliveryDestination)
+        delivered_count = sum(
+            any(
+                isinstance(occupant, Item)
+                and occupant.item_id == destination.target_item_id
+                for occupant in world.get_entities_at(destination.position)
+            )
+            for destination in destinations
+        )
         status = "Running" if session.playing else "Paused"
         status_color = (36, 130, 82) if session.playing else PALETTE.text_muted
         draw_text(
@@ -1411,7 +1434,10 @@ class PygameSimulationApp:
             (96, 67),
             color=PALETTE.text,
         )
-        counts = f"Robots: {robot_count}   Items: {item_count}"
+        counts = (
+            f"Robots: {robot_count}   Items: {item_count}   "
+            f"Delivered: {delivered_count}/{len(destinations)}"
+        )
         counts_width = self._small_font.size(counts)[0]
         draw_text(
             self.surface,
@@ -1542,6 +1568,28 @@ class PygameSimulationApp:
         cell_height = rect.height / world.height
         minimum_cell = min(cell_width, cell_height)
 
+        for destination in world.get_entities(DeliveryDestination):
+            items = tuple(
+                occupant
+                for occupant in world.get_entities_at(destination.position)
+                if isinstance(occupant, Item)
+            )
+            if not items:
+                color = _DESTINATION_EMPTY
+            elif any(
+                item.item_id == destination.target_item_id for item in items
+            ):
+                color = _DESTINATION_CORRECT
+            else:
+                color = _DESTINATION_WRONG
+            self._draw_destination_marker(
+                destination.position,
+                rect,
+                cell_width,
+                cell_height,
+                color,
+            )
+
         for item in world.get_entities(Item):
             center = self._position_center(item.position, rect, cell_width, cell_height)
             radius = max(2, round(minimum_cell * 0.36))
@@ -1565,6 +1613,36 @@ class PygameSimulationApp:
                     label,
                     (center[0] - label.get_width() // 2, center[1] + radius + 1),
                 )
+
+    def _draw_destination_marker(
+        self,
+        position: tuple[int, int],
+        grid: pygame.Rect,
+        cell_width: float,
+        cell_height: float,
+        color: tuple[int, int, int],
+    ) -> None:
+        assert self.surface is not None
+        x, y = position
+        left = grid.x + round(x * cell_width)
+        top = grid.y + round(y * cell_height)
+        right = grid.x + round((x + 1) * cell_width)
+        bottom = grid.y + round((y + 1) * cell_height)
+        inset = max(1, round(min(cell_width, cell_height) * 0.1))
+        marker = pygame.Rect(
+            left + inset,
+            top + inset,
+            max(1, right - left - 2 * inset),
+            max(1, bottom - top - 2 * inset),
+        )
+        pygame.draw.rect(self.surface, color, marker, border_radius=3)
+        pygame.draw.rect(
+            self.surface,
+            _DESTINATION_EDGE,
+            marker,
+            width=1,
+            border_radius=3,
+        )
 
     def _draw_grid_background(self, width: int, height: int, rect: pygame.Rect) -> None:
         assert self.surface is not None

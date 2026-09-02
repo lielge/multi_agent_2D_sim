@@ -8,6 +8,7 @@ from multi_agent_sim.controllers import (
     ControllerDefinition,
     ControllerFactoryContext,
     ControllerRegistry,
+    DeliveryDestinationObservation,
     ItemObservation,
     MultiAgentControllerAdapter,
     NearestItemController,
@@ -17,7 +18,7 @@ from multi_agent_sim.controllers import (
     create_default_controller_registry,
     create_world_observation,
 )
-from multi_agent_sim.entities import Item, Robot
+from multi_agent_sim.entities import DeliveryDestination, Item, Robot
 from multi_agent_sim.world import SimulationWorld
 
 
@@ -26,6 +27,7 @@ def make_observation(
     timestep: int = 0,
     robots: tuple[RobotObservation, ...] | None = None,
     items: tuple[ItemObservation, ...] = (),
+    destinations: tuple[DeliveryDestinationObservation, ...] = (),
     costs: ActionBatteryCosts | None = None,
 ) -> WorldObservation:
     return WorldObservation(
@@ -36,6 +38,7 @@ def make_observation(
         or (RobotObservation("robot_1", (2, 2), battery_level=100),),
         items=items,
         action_battery_costs=costs or ActionBatteryCosts(),
+        destinations=destinations,
     )
 
 
@@ -54,6 +57,14 @@ class ObservationTests(unittest.TestCase):
                 ItemObservation("item_1", (0, 2)),
             ],
             action_battery_costs=ActionBatteryCosts(2, 3, 0.5, 4),
+            destinations=[
+                DeliveryDestinationObservation(
+                    "destination_2", (2, 2), "item_2"
+                ),
+                DeliveryDestinationObservation(
+                    "destination_1", (1, 2), "item_1"
+                ),
+            ],
         )
 
         self.assertEqual(
@@ -64,8 +75,19 @@ class ObservationTests(unittest.TestCase):
             tuple(item.item_id for item in observation.items),
             ("item_1", "item_2"),
         )
+        self.assertEqual(
+            tuple(
+                (destination.destination_id, destination.target_item_id)
+                for destination in observation.destinations
+            ),
+            (("destination_1", "item_1"), ("destination_2", "item_2")),
+        )
         self.assertEqual(observation.get_robot("robot_1").carried_item_id, "collected")
         self.assertEqual(observation.get_item("item_2").position, (3, 2))
+        self.assertEqual(
+            observation.get_destination("destination_2").target_item_id,
+            "item_2",
+        )
         self.assertIs(observation.action_costs, observation.action_battery_costs)
         self.assertEqual(observation.action_costs.drop, 4.0)
         self.assertEqual(observation.action_costs.cost_for(Action.DROP), 4.0)
@@ -73,6 +95,8 @@ class ObservationTests(unittest.TestCase):
             observation.get_robot("missing")
         with self.assertRaises(KeyError):
             observation.get_item("missing")
+        with self.assertRaises(KeyError):
+            observation.get_destination("missing")
 
     def test_observations_are_frozen_and_validate_unique_in_bounds_data(self) -> None:
         robot = RobotObservation("robot_1", (0, 0), 5)
@@ -85,6 +109,17 @@ class ObservationTests(unittest.TestCase):
             make_observation(robots=(RobotObservation("robot_1", (6, 0), 5),))
         with self.assertRaises(ValueError):
             RobotObservation("robot_1", (0, 0), float("nan"))
+        with self.assertRaises(ValueError):
+            make_observation(
+                destinations=(
+                    DeliveryDestinationObservation(
+                        "destination_1", (1, 0), "item_1"
+                    ),
+                    DeliveryDestinationObservation(
+                        "destination_2", (2, 0), "item_1"
+                    ),
+                )
+            )
 
     def test_from_world_copies_public_state_without_aliasing_entities(self) -> None:
         costs = ActionBatteryCosts(movement=2, pickup=4, wait=0.25, drop=5)
@@ -92,6 +127,9 @@ class ObservationTests(unittest.TestCase):
         world.add_entity(Robot("robot_2", (2, 1), battery_level=8))
         world.add_entity(Robot("robot_1", (1, 1), battery_level=6))
         world.add_entity(Item("item_1", (0, 0)))
+        world.add_entity(
+            DeliveryDestination("destination_1", (3, 0), "item_1")
+        )
 
         observation = create_world_observation(world)
 
@@ -101,6 +139,10 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(
             tuple(robot.robot_id for robot in observation.robots),
             ("robot_1", "robot_2"),
+        )
+        self.assertEqual(
+            observation.destinations,
+            (DeliveryDestinationObservation("destination_1", (3, 0), "item_1"),),
         )
         world.move_entity("robot_1", (3, 2))
         self.assertEqual(observation.get_robot("robot_1").position, (1, 1))

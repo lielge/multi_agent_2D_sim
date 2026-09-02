@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 
 from .actions import ActionBatteryCosts
-from .entities import Item, Position, Robot
+from .entities import DeliveryDestination, Item, Position, Robot
 from .world import SimulationWorld
 
 
@@ -27,7 +27,8 @@ def generate_random_world(
         action_battery_costs=action_battery_costs,
     )
 
-    entity_count = num_robots + num_items
+    initial_entity_count = num_robots + num_items
+    entity_count = num_robots + 2 * num_items
     capacity = width * height
     if entity_count > capacity:
         raise ValueError(
@@ -35,7 +36,7 @@ def generate_random_world(
         )
 
     rng = random.Random(seed)
-    cell_indices = rng.sample(range(capacity), entity_count)
+    cell_indices = rng.sample(range(capacity), initial_entity_count)
     positions: list[Position] = [
         (cell_index % width, cell_index // width) for cell_index in cell_indices
     ]
@@ -50,6 +51,20 @@ def generate_random_world(
             Item(
                 item_id=f"item_{index + 1}",
                 position=positions[num_robots + index],
+            )
+        )
+
+    occupied_indices = set(cell_indices)
+    destination_indices = rng.sample(
+        tuple(index for index in range(capacity) if index not in occupied_indices),
+        num_items,
+    )
+    for index, cell_index in enumerate(destination_indices, start=1):
+        world.add_entity(
+            DeliveryDestination(
+                destination_id=f"destination_{index}",
+                position=(cell_index % width, cell_index // width),
+                target_item_id=f"item_{index}",
             )
         )
 

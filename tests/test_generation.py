@@ -3,7 +3,13 @@ from __future__ import annotations
 import random
 import unittest
 
-from multi_agent_sim import ActionBatteryCosts, Item, Robot, generate_random_world
+from multi_agent_sim import (
+    ActionBatteryCosts,
+    DeliveryDestination,
+    Item,
+    Robot,
+    generate_random_world,
+)
 
 
 def snapshot(world: object) -> list[tuple[str, str, tuple[int, int]]]:
@@ -24,6 +30,7 @@ class RandomGenerationTests(unittest.TestCase):
         world = generate_random_world(5, 4, 3, 5, seed=7)
         robots = world.get_entities(Robot)
         items = world.get_entities(Item)
+        destinations = world.get_entities(DeliveryDestination)
 
         self.assertEqual(
             tuple(robot.robot_id for robot in robots),
@@ -32,6 +39,16 @@ class RandomGenerationTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.item_id for item in items),
             ("item_1", "item_2", "item_3", "item_4", "item_5"),
+        )
+        self.assertEqual(
+            tuple(
+                (destination.destination_id, destination.target_item_id)
+                for destination in destinations
+            ),
+            tuple(
+                (f"destination_{index}", f"item_{index}")
+                for index in range(1, 6)
+            ),
         )
         positions = [entity.position for entity in world.get_entities()]
         self.assertEqual(len(positions), len(set(positions)))
@@ -43,6 +60,8 @@ class RandomGenerationTests(unittest.TestCase):
             generate_random_world(2, 2, 1, True)  # type: ignore[arg-type]
         with self.assertRaises(ValueError):
             generate_random_world(2, 2, 3, 2)
+        with self.assertRaises(ValueError):
+            generate_random_world(2, 2, 1, 2)
 
     def test_generation_does_not_mutate_global_random_state(self) -> None:
         random.seed(12345)

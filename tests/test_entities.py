@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from multi_agent_sim import Item, Robot, SimulationWorld
+from multi_agent_sim import DeliveryDestination, Item, Robot, SimulationWorld
 
 
 class EntityTests(unittest.TestCase):
@@ -29,6 +29,32 @@ class EntityTests(unittest.TestCase):
             with self.subTest(battery_level=invalid_battery):
                 with self.assertRaises(ValueError):
                     Robot("robot_1", (0, 0), battery_level=invalid_battery)
+
+    def test_delivery_destination_exposes_validated_assignment(self) -> None:
+        destination = DeliveryDestination(
+            "destination_1",
+            (4, 5),
+            "item_1",
+        )
+
+        self.assertEqual(destination.entity_id, "destination_1")
+        self.assertEqual(destination.position, (4, 5))
+        self.assertEqual(destination.target_item_id, "item_1")
+        self.assertEqual(
+            repr(destination),
+            "DeliveryDestination(destination_id='destination_1', "
+            "position=(4, 5), target_item_id='item_1')",
+        )
+
+        for arguments in (
+            ("", (0, 0), "item_1"),
+            ("destination_1", (0, 0), ""),
+            ("item_1", (0, 0), "item_1"),
+            ("destination_1", [0, 0], "item_1"),
+        ):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValueError):
+                    DeliveryDestination(*arguments)  # type: ignore[arg-type]
 
     def test_position_is_read_only_to_callers(self) -> None:
         robot = Robot("robot_1", (0, 0))

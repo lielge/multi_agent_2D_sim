@@ -21,7 +21,13 @@ from .controllers import (
     WorldObservation,
     create_default_controller_registry,
 )
-from .entities import Item, Position, Robot, validate_position_shape
+from .entities import (
+    DeliveryDestination,
+    Item,
+    Position,
+    Robot,
+    validate_position_shape,
+)
 from .world import SimulationWorld
 
 
@@ -81,6 +87,7 @@ class InitialScenario:
     action_battery_costs: ActionBatteryCosts = field(
         default_factory=ActionBatteryCosts
     )
+    delivery_destination_positions: tuple[Position, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_positive_integer(self.width, "width")
@@ -101,6 +108,14 @@ class InitialScenario:
             item_positions = tuple(self.item_positions)
         except TypeError as exc:
             raise ValueError("item_positions must be a sequence of positions") from exc
+        try:
+            delivery_destination_positions = tuple(
+                self.delivery_destination_positions
+            )
+        except TypeError as exc:
+            raise ValueError(
+                "delivery_destination_positions must be a sequence of positions"
+            ) from exc
 
         if not all(
             isinstance(configuration, RobotConfiguration)
@@ -111,12 +126,29 @@ class InitialScenario:
             )
         for position in item_positions:
             validate_position_shape(position)
+        for position in delivery_destination_positions:
+            validate_position_shape(position)
+
+        if len(delivery_destination_positions) != len(item_positions):
+            raise ValueError(
+                "delivery_destination_positions must contain exactly one "
+                "position for each item"
+            )
 
         object.__setattr__(self, "robot_configurations", robot_configurations)
         object.__setattr__(self, "item_positions", item_positions)
+        object.__setattr__(
+            self,
+            "delivery_destination_positions",
+            delivery_destination_positions,
+        )
 
         capacity = self.width * self.height
-        entity_count = len(robot_configurations) + len(item_positions)
+        entity_count = (
+            len(robot_configurations)
+            + len(item_positions)
+            + len(delivery_destination_positions)
+        )
         if entity_count > capacity:
             raise ValueError(
                 f"cannot place {entity_count} entities in a world with {capacity} cells"
@@ -129,19 +161,31 @@ class InitialScenario:
             raise ValueError("robot positions must be unique")
         if len(set(item_positions)) != len(item_positions):
             raise ValueError("item positions must be unique")
+        if len(set(delivery_destination_positions)) != len(
+            delivery_destination_positions
+        ):
+            raise ValueError("delivery destination positions must be unique")
 
-        for position in (*robot_positions, *item_positions):
+        for position in (
+            *robot_positions,
+            *item_positions,
+            *delivery_destination_positions,
+        ):
             if not self._is_in_bounds(position):
                 raise ValueError(
                     f"position {position!r} is outside world bounds "
                     f"0 <= x < {self.width}, 0 <= y < {self.height}"
                 )
 
-        overlap = set(robot_positions).intersection(item_positions)
-        if overlap:
-            position = min(overlap)
+        all_positions = (
+            *robot_positions,
+            *item_positions,
+            *delivery_destination_positions,
+        )
+        if len(set(all_positions)) != len(all_positions):
             raise ValueError(
-                f"initial robot and item positions must not overlap: {position!r}"
+                "initial robot, item, and delivery destination positions "
+                "must not overlap"
             )
 
     @property
@@ -151,6 +195,10 @@ class InitialScenario:
     @property
     def num_items(self) -> int:
         return len(self.item_positions)
+
+    @property
+    def num_destinations(self) -> int:
+        return len(self.delivery_destination_positions)
 
     def create_world(self) -> SimulationWorld:
         """Build a fresh world at timestep zero from this specification."""
@@ -170,6 +218,17 @@ class InitialScenario:
             )
         for index, position in enumerate(self.item_positions, start=1):
             world.add_entity(Item(item_id=f"item_{index}", position=position))
+        for index, position in enumerate(
+            self.delivery_destination_positions,
+            start=1,
+        ):
+            world.add_entity(
+                DeliveryDestination(
+                    destination_id=f"destination_{index}",
+                    position=position,
+                    target_item_id=f"item_{index}",
+                )
+            )
         return world
 
     def _is_in_bounds(self, position: Position) -> bool:
@@ -193,7 +252,8 @@ def create_initial_scenario(
     When ``robot_configurations`` is ``None``, robot positions are sampled
     along with item positions and every robot starts with battery level 100.
     When configurations are supplied, their positions and batteries are kept
-    exactly and only the item positions are sampled.
+    exactly and only the item positions are sampled. In both cases, one
+    destination is sampled for every item after robot and item placement.
     """
 
     _validate_positive_integer(width, "width")
@@ -228,7 +288,7 @@ def create_initial_scenario(
         )
 
     capacity = width * height
-    entity_count = num_robots + num_items
+    entity_count = num_robots + 2 * num_items
     if entity_count > capacity:
         raise ValueError(
             f"cannot place {entity_count} entities in a world with {capacity} cells"
@@ -236,7 +296,8 @@ def create_initial_scenario(
 
     rng = random.Random(seed)
     if robot_configurations is None:
-        sampled_indices = rng.sample(range(capacity), entity_count)
+        initial_entity_count = num_robots + num_items
+        sampled_indices = rng.sample(range(capacity), initial_entity_count)
         sampled_positions = tuple(
             (cell_index % width, cell_index // width)
             for cell_index in sampled_indices
@@ -299,6 +360,22 @@ def create_initial_scenario(
             for cell_index in sampled_indices
         )
 
+    occupied_indices = {
+        configuration.position[1] * width + configuration.position[0]
+        for configuration in configurations
+    }
+    occupied_indices.update(
+        position[1] * width + position[0] for position in item_positions
+    )
+    destination_indices = rng.sample(
+        tuple(index for index in range(capacity) if index not in occupied_indices),
+        num_items,
+    )
+    delivery_destination_positions = tuple(
+        (cell_index % width, cell_index // width)
+        for cell_index in destination_indices
+    )
+
     return InitialScenario(
         width=width,
         height=height,
@@ -306,6 +383,7 @@ def create_initial_scenario(
         item_positions=item_positions,
         seed=seed,
         action_battery_costs=costs,
+        delivery_destination_positions=delivery_destination_positions,
     )
 
 

@@ -17,7 +17,13 @@ from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
 from .actions import Action, ActionBatteryCosts
-from .entities import Item, Position, Robot, validate_position_shape
+from .entities import (
+    DeliveryDestination,
+    Item,
+    Position,
+    Robot,
+    validate_position_shape,
+)
 from .world import SimulationWorld
 
 
@@ -73,6 +79,22 @@ class ItemObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class DeliveryDestinationObservation:
+    """Read-only controller view of one delivery destination."""
+
+    destination_id: str
+    position: Position
+    target_item_id: str
+
+    def __post_init__(self) -> None:
+        _validate_entity_identifier(self.destination_id, "destination_id")
+        _validate_entity_identifier(self.target_item_id, "target_item_id")
+        if self.destination_id == self.target_item_id:
+            raise ValueError("destination_id and target_item_id must be different")
+        validate_position_shape(self.position)
+
+
+@dataclass(frozen=True, slots=True)
 class WorldObservation:
     """An immutable, deterministically ordered snapshot of a world."""
 
@@ -82,6 +104,7 @@ class WorldObservation:
     robots: tuple[RobotObservation, ...]
     items: tuple[ItemObservation, ...]
     action_battery_costs: ActionBatteryCosts
+    destinations: tuple[DeliveryDestinationObservation, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.width) is not int or self.width <= 0:
@@ -107,20 +130,48 @@ class WorldObservation:
             raise ValueError(
                 "items must be an iterable of ItemObservation values"
             ) from exc
+        try:
+            destinations = tuple(self.destinations)
+        except TypeError as exc:
+            raise ValueError(
+                "destinations must be an iterable of "
+                "DeliveryDestinationObservation values"
+            ) from exc
         if not all(isinstance(robot, RobotObservation) for robot in robots):
             raise ValueError("robots must contain only RobotObservation values")
         if not all(isinstance(item, ItemObservation) for item in items):
             raise ValueError("items must contain only ItemObservation values")
+        if not all(
+            isinstance(destination, DeliveryDestinationObservation)
+            for destination in destinations
+        ):
+            raise ValueError(
+                "destinations must contain only "
+                "DeliveryDestinationObservation values"
+            )
 
         robots = tuple(sorted(robots, key=lambda robot: robot.robot_id))
         items = tuple(sorted(items, key=lambda item: item.item_id))
+        destinations = tuple(
+            sorted(destinations, key=lambda destination: destination.destination_id)
+        )
         robot_ids = tuple(robot.robot_id for robot in robots)
         item_ids = tuple(item.item_id for item in items)
+        destination_ids = tuple(
+            destination.destination_id for destination in destinations
+        )
         if len(set(robot_ids)) != len(robot_ids):
             raise ValueError("robot IDs must be unique")
         if len(set(item_ids)) != len(item_ids):
             raise ValueError("item IDs must be unique")
-        for observation in (*robots, *items):
+        if len(set(destination_ids)) != len(destination_ids):
+            raise ValueError("destination IDs must be unique")
+        target_item_ids = tuple(
+            destination.target_item_id for destination in destinations
+        )
+        if len(set(target_item_ids)) != len(target_item_ids):
+            raise ValueError("destination target item IDs must be unique")
+        for observation in (*robots, *items, *destinations):
             x, y = observation.position
             if not 0 <= x < self.width or not 0 <= y < self.height:
                 raise ValueError(
@@ -129,6 +180,7 @@ class WorldObservation:
 
         object.__setattr__(self, "robots", robots)
         object.__setattr__(self, "items", items)
+        object.__setattr__(self, "destinations", destinations)
 
     @classmethod
     def create(
@@ -139,6 +191,7 @@ class WorldObservation:
         robots: Iterable[RobotObservation],
         items: Iterable[ItemObservation],
         action_battery_costs: ActionBatteryCosts,
+        destinations: Iterable[DeliveryDestinationObservation] = (),
     ) -> WorldObservation:
         """Create a validated snapshot from arbitrary observation iterables."""
 
@@ -149,6 +202,7 @@ class WorldObservation:
             robots=tuple(robots),
             items=tuple(items),
             action_battery_costs=action_battery_costs,
+            destinations=tuple(destinations),
         )
 
     @classmethod
@@ -174,6 +228,14 @@ class WorldObservation:
                 ItemObservation(item_id=item.item_id, position=item.position)
                 for item in world.get_entities(Item)
             ),
+            destinations=(
+                DeliveryDestinationObservation(
+                    destination_id=destination.destination_id,
+                    position=destination.position,
+                    target_item_id=destination.target_item_id,
+                )
+                for destination in world.get_entities(DeliveryDestination)
+            ),
             action_battery_costs=world.action_battery_costs,
         )
 
@@ -198,6 +260,17 @@ class WorldObservation:
             if item.item_id == item_id:
                 return item
         raise KeyError(f"unknown item ID: {item_id!r}")
+
+    def get_destination(
+        self,
+        destination_id: str,
+    ) -> DeliveryDestinationObservation:
+        """Return a destination observation or raise ``KeyError``."""
+
+        for destination in self.destinations:
+            if destination.destination_id == destination_id:
+                return destination
+        raise KeyError(f"unknown destination ID: {destination_id!r}")
 
 
 def create_world_observation(world: SimulationWorld) -> WorldObservation:
