@@ -88,11 +88,16 @@ class InitialScenario:
         default_factory=ActionBatteryCosts
     )
     delivery_destination_positions: tuple[Position, ...] = ()
+    initially_delivered_items: int = 0
 
     def __post_init__(self) -> None:
         _validate_positive_integer(self.width, "width")
         _validate_positive_integer(self.height, "height")
         _validate_seed(self.seed)
+        _validate_non_negative_integer(
+            self.initially_delivered_items,
+            "initially_delivered_items",
+        )
         if not isinstance(self.action_battery_costs, ActionBatteryCosts):
             raise ValueError(
                 "action_battery_costs must be an ActionBatteryCosts instance"
@@ -134,6 +139,10 @@ class InitialScenario:
                 "delivery_destination_positions must contain exactly one "
                 "position for each item"
             )
+        if self.initially_delivered_items > len(item_positions):
+            raise ValueError(
+                "initially_delivered_items cannot exceed the item count"
+            )
 
         object.__setattr__(self, "robot_configurations", robot_configurations)
         object.__setattr__(self, "item_positions", item_positions)
@@ -144,14 +153,15 @@ class InitialScenario:
         )
 
         capacity = self.width * self.height
-        entity_count = (
+        required_cells = (
             len(robot_configurations)
             + len(item_positions)
             + len(delivery_destination_positions)
+            - self.initially_delivered_items
         )
-        if entity_count > capacity:
+        if required_cells > capacity:
             raise ValueError(
-                f"cannot place {entity_count} entities in a world with {capacity} cells"
+                f"cannot place the scenario in a world with {capacity} cells"
             )
 
         robot_positions = tuple(
@@ -177,15 +187,39 @@ class InitialScenario:
                     f"0 <= x < {self.width}, 0 <= y < {self.height}"
                 )
 
-        all_positions = (
-            *robot_positions,
-            *item_positions,
-            *delivery_destination_positions,
-        )
-        if len(set(all_positions)) != len(all_positions):
+        robot_occupied = set(robot_positions)
+        if robot_occupied.intersection(item_positions) or robot_occupied.intersection(
+            delivery_destination_positions
+        ):
             raise ValueError(
                 "initial robot, item, and delivery destination positions "
                 "must not overlap"
+            )
+        for index, (item_position, destination_position) in enumerate(
+            zip(
+                item_positions,
+                delivery_destination_positions,
+                strict=True,
+            )
+        ):
+            should_be_delivered = index < self.initially_delivered_items
+            if should_be_delivered != (item_position == destination_position):
+                raise ValueError(
+                    "initial item and destination positions must not overlap "
+                    "unless the item is configured as initially delivered"
+                )
+        allowed_pairs = {
+            (item_positions[index], delivery_destination_positions[index])
+            for index in range(self.initially_delivered_items)
+        }
+        cross_overlaps = set(item_positions).intersection(
+            delivery_destination_positions
+        )
+        allowed_positions = {item for item, _ in allowed_pairs}
+        if cross_overlaps != allowed_positions:
+            raise ValueError(
+                "initial item and destination positions must not overlap except "
+                "at their own configured delivered pairs"
             )
 
     @property
@@ -246,6 +280,7 @@ def create_initial_scenario(
     *,
     action_battery_costs: ActionBatteryCosts | None = None,
     controller_keys: Sequence[str] | None = None,
+    initially_delivered_items: int = 0,
 ) -> InitialScenario:
     """Create a reproducible random or manually configured initial scenario.
 
@@ -260,6 +295,12 @@ def create_initial_scenario(
     _validate_positive_integer(height, "height")
     _validate_non_negative_integer(num_robots, "num_robots")
     _validate_non_negative_integer(num_items, "num_items")
+    _validate_non_negative_integer(
+        initially_delivered_items,
+        "initially_delivered_items",
+    )
+    if initially_delivered_items > num_items:
+        raise ValueError("initially_delivered_items cannot exceed num_items")
     _validate_seed(seed)
     costs = action_battery_costs or ActionBatteryCosts()
     if not isinstance(costs, ActionBatteryCosts):
@@ -288,10 +329,10 @@ def create_initial_scenario(
         )
 
     capacity = width * height
-    entity_count = num_robots + 2 * num_items
-    if entity_count > capacity:
+    required_cells = num_robots + 2 * num_items - initially_delivered_items
+    if required_cells > capacity:
         raise ValueError(
-            f"cannot place {entity_count} entities in a world with {capacity} cells"
+            f"cannot place the scenario in a world with {capacity} cells"
         )
 
     rng = random.Random(seed)
@@ -369,11 +410,15 @@ def create_initial_scenario(
     )
     destination_indices = rng.sample(
         tuple(index for index in range(capacity) if index not in occupied_indices),
-        num_items,
+        num_items - initially_delivered_items,
     )
-    delivery_destination_positions = tuple(
+    undelivered_destination_positions = tuple(
         (cell_index % width, cell_index // width)
         for cell_index in destination_indices
+    )
+    delivery_destination_positions = (
+        *item_positions[:initially_delivered_items],
+        *undelivered_destination_positions,
     )
 
     return InitialScenario(
@@ -384,6 +429,7 @@ def create_initial_scenario(
         seed=seed,
         action_battery_costs=costs,
         delivery_destination_positions=delivery_destination_positions,
+        initially_delivered_items=initially_delivered_items,
     )
 
 
@@ -451,9 +497,23 @@ class SimulationSession:
             if robot_id in overrides:
                 controller = overrides[robot_id]
             else:
+                definition = controller_registry.definition(
+                    self._controller_keys[robot_id]
+                )
+                if not definition.supports_scenario(
+                    len(robot_ids), len(scenario.item_positions)
+                ):
+                    raise ValueError(
+                        f"controller {definition.display_name!r} does not support "
+                        f"{len(robot_ids)} robots and {len(scenario.item_positions)} items"
+                    )
                 controller = controller_registry.create(
                     self._controller_keys[robot_id],
-                    ControllerFactoryContext(seed=scenario.seed, robot_id=robot_id),
+                    ControllerFactoryContext(
+                        seed=scenario.seed,
+                        robot_id=robot_id,
+                        max_steps=max_steps,
+                    ),
                 )
             if not callable(getattr(controller, "choose_action", None)):
                 raise ValueError(

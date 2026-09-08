@@ -36,12 +36,18 @@ The main code areas and the problems they solve are:
 | `src/multi_agent_sim/controllers.py` | Defines immutable observations, per-robot and joint controller protocols, registry/factories, and built-in policies. | Lets rule-based, planning, learned, or team policies plug in without depending on `SimulationWorld` internals. |
 | `src/multi_agent_sim/session.py` | Defines initial scenarios, constructs controllers, asks for actions, records history/warnings, and rebuilds on rewind. | Bridges controllers to the forward-only world while providing exact Back/Forward navigation. |
 | `src/multi_agent_sim/generation.py` | Builds a seeded random world directly. | Offers a lightweight convenience path when controller selection and timeline history are not needed. |
+| `src/multi_agent_sim/episode.py` | Scores observation/result transitions and runs forward-only episodes. | Adds reward, cost, success, and timeout without putting objective policy in the world or replay session. |
+| `src/multi_agent_sim/training_env.py` | Encodes fixed slots and validates one-hot team commands. | Gives learning code a stable dependency-free boundary around an episode. |
+| `src/multi_agent_sim/learning.py` | Defines the optional shared PyTorch MLP and REINFORCE helpers. | Keeps tensors, gradients, training, evaluation, and checkpoints out of simulation code. |
+| `src/multi_agent_sim/controller_catalog.py` | Discovers and validates immutable saved-controller model/manifest pairs. | Makes catalog inspection safe and deterministic without importing Torch. |
+| `src/multi_agent_sim/saved_mlp_controllers.py` | Adapts a catalog MLP to the session controller protocol. | Keeps model loading and one-hot-to-`Action` conversion at the optional integration boundary. |
 | `src/multi_agent_sim/visualization/` | Provides widgets, the setup/playback application, and a separate minimal renderer. | Keeps Pygame optional and keeps rendering outside the core transition engine. |
-| `examples/basic_simulation.py` | Parses CLI settings and selects visual or headless execution. | Provides the repository's executable demonstration and end-to-end composition root. |
+| `examples/` | Contains ordinary simulation, scored-episode, and MLP training/evaluation commands. | Provides separate composition roots for each architectural block. |
 | `tests/` | Verifies core rules, controllers, replay, UI events, and CLI behavior. | Defines the executable behavioral contract and catches cross-layer regressions. |
 
-The core package has no runtime dependencies. Pygame and pytest are optional
-extras declared in `pyproject.toml`.
+The simulation, external scoring, and encoding layers have no runtime
+dependencies. Pygame, PyTorch/NumPy, and pytest are optional extras declared in
+`pyproject.toml`.
 
 ## 2. Architecture
 
@@ -149,13 +155,16 @@ charge battery or advance simulation time. Robot behavior should normally use
   `robot_2`, and so on.
 - `InitialScenario` is the immutable, validated initial specification. Its
   semantically required `delivery_destination_positions` contains exactly one
-  position per item; tuple order maps `destination_n` to `item_n`.
+  position per item; tuple order maps `destination_n` to `item_n`. The explicit
+  `initially_delivered_items` count permits that many leading matching
+  item/destination pairs to share their initial cells.
   `create_world()` always creates fresh entities at timestep zero.
 - `create_initial_scenario()` uses a local `random.Random(seed)`. In random
   mode it samples unique robot and item cells. In manual mode it preserves
   robot positions/batteries and samples item cells excluding robot cells. It
-  then samples one destination per item from the remaining cells. Capacity is
-  therefore `robots + 2 * items`.
+  then keeps leading initially delivered destinations on their items and
+  samples the remaining destinations from free cells. Required capacity is
+  `robots + 2 * items - initially_delivered_items`.
 - `SimulationSession` owns the current world, controller instances, action
   history, controller-warning history, history cursor, rate, maximum steps,
   and play state.
@@ -575,9 +584,9 @@ session = SimulationSession(scenario, controller_registry=registry)
 ```
 
 Return an `Action` enum member, not its string value. A registry factory gets
-only seed and robot ID; close over model/configuration dependencies or inject a
-fully constructed controller through `controller_overrides` when more context
-is needed.
+the scenario seed, robot ID, and session `max_steps`; close over other
+model/configuration dependencies or inject a fully constructed controller
+through `controller_overrides` when more context is needed.
 
 For a planner, RL policy, or neural network, keep conversion code inside the
 controller adapter: transform `WorldObservation` into the model's input,
@@ -587,8 +596,10 @@ no timeout, so slow inference blocks the headless loop or Pygame UI.
 To expose a custom controller in the GUI, register it **before** constructing
 `PygameSimulationApp` and pass the registry to the app. The setup selectors
 copy registry definitions during app construction; later registry additions
-do not refresh existing selectors. The CLI currently has no controller-key or
-plugin-loading flag.
+do not refresh existing selectors. Saved catalog controllers are the exception:
+the explicit reload action replaces those choices. The CLI's `--controller`
+option accepts a built-in key or saved controller ID; loading other custom
+controller code still requires programmatic registry construction.
 
 ### Add a joint multi-agent controller
 
@@ -731,9 +742,9 @@ unless marked **inference**:
   code calls `WorldObservation.from_world()` directly.
 - `SimulationSession.latest_controller_errors` is a compatibility alias with
   no repository caller.
-- Headless CLI execution has no controller-selection or custom-registry flag,
-  so it always uses default Random controllers. Custom headless controllers
-  require programmatic construction.
+- Headless CLI execution accepts `--controller` to initialize every robot with
+  a built-in registry key or saved controller ID. Arbitrary custom registries
+  still require programmatic construction.
 - `NearestItemController` intentionally remains item-only: it waits forever
   after pickup and never chooses `DROP`, even though destinations are visible
   in its observation.
@@ -741,8 +752,9 @@ unless marked **inference**:
   `ActionResult` history. Pygame shows controller warnings, not ordinary world
   failure reasons; an embedding caller must inspect each `step_forward()`
   return immediately if it needs them.
-- The GUI snapshots registry choices during construction. Registering another
-  controller afterward does not update existing selectors.
+- The GUI snapshots ordinary registry changes during construction. Its
+  **Reload controllers** action explicitly rescans saved manifests and
+  preserves every still-valid per-robot selection.
 - Controller action-time exceptions are isolated, but an unknown controller
   key or failing factory during `SimulationSession` construction propagates.
   `PygameSimulationApp._start_simulation()` does not convert that startup
@@ -773,9 +785,12 @@ unless marked **inference**:
 
 | File | Responsibility | Why you may need to edit it |
 |---|---|---|
-| `pyproject.toml` | Python version, package discovery, optional Pygame/pytest extras, pytest settings. | Change packaging, dependency ranges, supported Python, or add a console script. |
+| `pyproject.toml` | Python version, package discovery, optional visualization/training/dev extras, pytest settings. | Change packaging, dependency ranges, supported Python, or add a console script. |
 | `README.md` | User-facing install, run, API, world-semantics, and controller examples. | Keep public behavior and commands aligned with implementation changes. |
-| `examples/basic_simulation.py` | Only executable entry; CLI parsing and visual/headless composition. | Add CLI settings, controller-loading support, or alter demo defaults/summary. |
+| `examples/basic_simulation.py` | Ordinary visual/headless simulation entry point. | Add CLI settings, controller-loading support, or alter demo defaults/summary. |
+| `examples/scored_episode.py` | Scripted headless episode with external objective reporting. | Demonstrate or smoke-test cost and reward independently of learning. |
+| `examples/train_mlp.py` | Curriculum training and checkpoint evaluation CLI. | Configure training, evaluation, devices, masks, or artifact locations. |
+| `examples/visualize_mlp_controller.py` | Saved-policy inference loop with optional Pygame rendering. | Watch greedy or stochastic one-hot controllers without coupling learning to the simulator. |
 | `src/multi_agent_sim/__init__.py` | Public core/controller/session re-exports. | Expose or retire a supported public API without importing Pygame into the core. |
 | `src/multi_agent_sim/actions.py` | `Action`, deltas, costs, failures, and `ActionResult`. | Add or change actions, charging categories, or result data. |
 | `src/multi_agent_sim/entities.py` | Entity ownership, positions, robot battery/inventory, items, and delivery destinations. | Add entity state/types or change inventory capacity while preserving owner guards. |
@@ -783,6 +798,11 @@ unless marked **inference**:
 | `src/multi_agent_sim/controllers.py` | Observation DTOs, protocols, registry, built-ins, stable seeding, and joint adapter. | Add observable state, controller types, factory behavior, or team-policy integration. |
 | `src/multi_agent_sim/session.py` | Scenario validation/creation, controller construction, action generation, history, replay, and playback state. | Change initialization, controller orchestration, timeline behavior, checkpoints, or error recording. |
 | `src/multi_agent_sim/generation.py` | Direct seeded random-world convenience factory. | Change the lightweight no-session generation path or keep it aligned with new world configuration. |
+| `src/multi_agent_sim/episode.py` | Observation/result-only team cost evaluator and forward-only episode runner. | Change objective weights, metrics, reward, or episode termination. |
+| `src/multi_agent_sim/training_env.py` | Fixed 4/8 slot encoder, action masks, one-hot conversions, and training wrapper. | Change the model-facing schema without coupling it to Torch. |
+| `src/multi_agent_sim/learning.py` | Optional shared MLP, per-robot learned controllers, REINFORCE curriculum, evaluation, and checkpoints. | Change learning behavior without changing simulation or scoring. |
+| `src/multi_agent_sim/controller_catalog.py` | Dependency-free controller manifests, discovery, checksum validation, and atomic publication. | Change the on-disk controller catalog contract without importing Torch. |
+| `src/multi_agent_sim/saved_mlp_controllers.py` | Optional shared model runtime and session-facing learned-policy adapter. | Change saved-policy inference, devices, masks, or session conversion. |
 | `src/multi_agent_sim/visualization/__init__.py` | Explicit Pygame-facing exports. | Add/remove public visualization adapters. |
 | `src/multi_agent_sim/visualization/pygame_app.py` | Setup form, validation, preview, app events, elapsed-time scheduler, timeline toolbar, status, and responsive drawing. | Add GUI configuration, controller selection/status, keyboard behavior, or interactive playback features. |
 | `src/multi_agent_sim/visualization/pygame_renderer.py` | Standalone read-only direct-world renderer and simple frame limiter. | Embed a world without the setup/session UI or keep standalone visuals consistent with the app. |
@@ -796,3 +816,155 @@ unless marked **inference**:
 | `tests/test_pygame_app.py` | Dummy-display setup, controls, scheduler, field propagation, selectors, warnings, scrolling, and minimum layout. | Validate app-level interactions or update tests after UI layout/refactoring. |
 | `tests/test_widgets.py` | Dummy-display mouse/keyboard behavior, focus, clipping, slider, and selector validation. | Validate reusable widget changes. |
 | `tests/test_demo.py` | Subprocess smoke tests for the real CLI, headless run, FPS rule, and cost flags. | Validate entry-point and argument changes end to end. |
+| `tests/test_episode.py` | Observation-only objective, progress, battery, success, and timeout behavior. | Validate reward/cost changes independently of controllers and visualization. |
+| `tests/test_training_env.py` | Fixed-slot rows, masks, one-hot validation, and wrapper behavior. | Validate the dependency-free learning boundary. |
+| `tests/test_learning.py` | MLP, REINFORCE, curriculum replay/recovery, and checkpoint behavior. | Validate optional Torch learning and exact CPU continuation. |
+| `tests/test_learning_examples.py` | Scoring, training, evaluation, and visual-runner CLI smoke tests. | Validate the separate public composition roots. |
+| `tests/test_controller_catalog.py` | Publication, discovery validation, deduplication, shared loading, and optional-Torch behavior. | Validate saved controllers independently of training continuation artifacts. |
+
+## 8. External scoring and learning path
+
+The training path is a second composition path, not an extension of
+`SimulationSession`:
+
+```mermaid
+flowchart TD
+    Model["SharedMLP<br/>155 → 128 → 128 → 7"]
+    Controllers["one MLPRobotController per robot<br/>shared model parameters"]
+    Commands["one-hot commands<br/>plain Python tuples"]
+    Environment["FixedSlotTeamEnv<br/>validation + decoding + encoding"]
+    Runner["EpisodeRunner<br/>forward-only orchestration"]
+    Evaluator["TeamCostEvaluator<br/>observations + ActionResults"]
+    World["SimulationWorld<br/>authoritative state transition"]
+
+    Model --> Controllers
+    Controllers --> Commands
+    Commands --> Environment
+    Environment -->|Action batch| Runner
+    Runner --> World
+    World -->|results + immutable snapshots| Runner
+    Runner --> Evaluator
+    Evaluator -->|shared reward + metrics| Runner
+    Runner --> Environment
+```
+
+The dependency direction is one-way: the world and replay session do not
+import the episode, environment, or learning modules. The evaluator never
+receives a live world. It verifies consecutive immutable observations and the
+per-robot action results, then uses actual `battery_spent` values for energy.
+It computes a route potential and delivered fraction from the same snapshots.
+For each item, the route is zero when delivered, carrier-to-destination while
+carried, or nearest-robot-to-item plus item-to-destination while uncarried.
+
+### Objective lifecycle
+
+`TeamCostEvaluator(initial_observation, max_steps, cost_weights)` establishes
+the fixed robot, item, and destination rosters and `E_max`. Each
+`evaluate_transition(previous, next, results)` call validates a single tick,
+computes the shared reward, and returns current `EpisodeMetrics`.
+The returned transition exposes `item_progress_reward`, `delivery_reward`, and
+an immutable decomposition of every reward component. Metrics expose the
+initial/current normalized route potential, delivered fraction, cumulative
+signed `item_progress_cost`, and `delivery_cost`. Route progress is
+`item_progress_weight * (R_previous - R_next)`. Delivery credit is
+`delivery_weight * (Q_next - Q_previous)`. Moving away or removing an item
+from its own destination is penalized symmetrically, so reversible route and
+delivery cycles net zero.
+
+`EpisodeRunner` performs this wiring for an `InitialScenario`. Unlike
+`SimulationSession`, it has no controllers, fallback actions, history, replay,
+or UI state. Callers must supply exactly one `Action` per robot. It checks
+success after the transition and before timeout, and refuses further steps
+after termination.
+
+The ordinary example composition checks the same observation-only delivery
+helper after each team step. It stops new forward execution on success without
+adding termination policy to `SimulationWorld` or `SimulationSession`; the
+Pygame timeline can still move Back and replay the successful transition.
+
+The undiscounted sum of rewards is exactly the negative accrued/final cost.
+REINFORCE defaults to `gamma=1`; choosing a smaller gamma changes the learning
+return and therefore breaks that equality, without changing reported episode
+cost or cumulative raw reward.
+
+### Model boundary
+
+`FixedSlotEncoder` repeats one global 151-value encoding for each present robot
+and appends that robot's four-way identity, producing four rows of 155 values.
+Robot and logical-item slots are stable for the episode; a carried item keeps
+its original item slot and uses its carrier's position and identity. Presence
+flags distinguish real slots from zero padding.
+
+Learned controllers alone use one-hot commands. Existing rule-based
+`RobotController` implementations continue to return `Action`. Each
+`MLPRobotController` returns exactly one immutable seven-value command while
+keeping its differentiable log-probability and entropy within the optional
+learning module. `FixedSlotTeamEnv` validates and decodes the complete command
+mapping before the simulator sees it.
+
+The advisory learned-policy mask excludes `Pick Up` when the colocated item is
+already at its own destination. This protection is outside the world: pickup
+remains a valid simulator action and can still be issued by an unmasked or
+rule-based controller.
+
+### Curriculum and checkpoint lifecycle
+
+The default curriculum has eight stages: 4x4/1 robot/1 item; a 4x4/1 robot/2
+item bridge with item 1 initially delivered; the original 4x4/1 robot/2 item
+problem; 5x5/1 robot/2 items; 6x6/2 robots/2 items; 8x8/2 robots/4 items;
+10x10/4 robots/4 items; and 12x12/4 robots/8 items. The pre-delivered bridge
+teaches the model to preserve one completed delivery while seeking the second
+item. Normal training replays a uniformly selected completed earlier stage
+with probability 0.4. Evaluation below the 0.8 retention threshold puts the
+trainer into recovery mode on the earliest regressed stage; only that stage is
+sampled until prior-stage evaluation recovers.
+
+`shared_mlp_best.pt` is a model-only inference artifact selected by held-out
+performance. `shared_mlp_latest.pt` is a full training bundle saved atomically
+after each optimizer update. It contains model and Adam state,
+Python/Torch/CUDA random state where applicable, counters, curriculum and
+evaluation boundaries, recovery state, configuration, objective weights, and
+format versions. Use `--initialize-from` to warm-start from a best checkpoint
+and `--resume-from` to continue a latest bundle exactly. Resume compatibility
+is checked before training begins.
+
+The route-and-delivery reward and learned action mask use explicit schema
+versions. Old model-only catalog entries remain inference-compatible because
+the encoding and network architecture did not change. Old full training
+bundles are not exact-resume compatible. The first protected-policy run should
+therefore start from random weights and use distinct
+`shared_mlp_protected_v3_best.pt` and `shared_mlp_protected_v3_latest.pt`
+paths.
+
+### Saved-controller catalog lifecycle
+
+`artifacts/shared_mlp_latest.pt` remains a mutable full training bundle and
+`artifacts/shared_mlp_best.pt` remains the mutable run-best inference state.
+After each training invocation, the best state is copied into `controllers/`
+under an informative unique filename. A matching `.controller.json` manifest
+is the commit marker and records the run ID, architecture/schema versions,
+qualification and validation result, counters, configuration, Torch version,
+and model SHA-256. The model is written atomically before the manifest;
+identical checksums are deduplicated.
+
+`discover_saved_controllers()` uses only the dependency-free catalog module.
+It scans manifests in deterministic order and rejects missing or modified
+models, duplicate IDs, incompatible versions, and model paths outside the
+catalog. `create_registry_with_saved_controllers()` is the optional Torch
+boundary. It loads a catalog model lazily once, shares that model among every
+robot using the entry, fixed-slot encodes each session observation with the
+session's actual `T_max`, obtains a plain one-hot command, and converts that
+command to `Action` only at the session adapter boundary.
+
+Every `MLPRobotController` also retains a detached plain-Python
+`PolicyDecision` for inspection: masked probabilities, legal mask, selected
+action/index, entropy, and greedy/stochastic mode. These diagnostics do not
+expose tensors or affect the differentiable distribution used by training.
+`examples/visualize_mlp_controller.py` can render them beside the grid and
+write full per-step traces with `--trace-report`.
+
+The Pygame setup merges saved entries after Random and Nearest Item and permits
+independent selection per robot. The reload action rescans the directory while
+retaining valid selections. The ordinary headless CLI accepts the same saved
+controller ID for all robots. Catalog policies default to greedy, masked CPU
+inference and enforce the encoder limits of four robots and eight items.

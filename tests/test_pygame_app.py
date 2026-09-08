@@ -13,8 +13,11 @@ try:
 except ModuleNotFoundError:
     pygame = None  # type: ignore[assignment]
 else:
-    from multi_agent_sim import DeliveryDestination, Item, SimulationWorld
-    from multi_agent_sim.controllers import create_default_controller_registry
+    from multi_agent_sim import Action, DeliveryDestination, Item, SimulationWorld
+    from multi_agent_sim.controllers import (
+        ControllerDefinition,
+        create_default_controller_registry,
+    )
     from multi_agent_sim.visualization import (
         PygameRenderer,
         PygameSimulationApp,
@@ -25,6 +28,26 @@ else:
 class _RaisingController:
     def choose_action(self, observation: object, robot_id: str) -> object:
         raise RuntimeError(f"test controller failed for {robot_id}")
+
+
+class _DeliveryController:
+    def choose_action(self, observation: object, robot_id: str) -> Action:
+        robot = observation.get_robot(robot_id)
+        destination = observation.destinations[0]
+        if robot.carried_item_id is not None:
+            target = destination.position
+            if robot.position == target:
+                return Action.DROP
+        else:
+            item = observation.get_item(destination.target_item_id)
+            target = item.position
+            if robot.position == target:
+                return Action.PICK_UP
+        dx = target[0] - robot.position[0]
+        dy = target[1] - robot.position[1]
+        if dx:
+            return Action.MOVE_RIGHT if dx > 0 else Action.MOVE_LEFT
+        return Action.MOVE_DOWN if dy > 0 else Action.MOVE_UP
 
 
 @unittest.skipUnless(pygame is not None, "pygame visualization extra is not installed")
@@ -129,6 +152,42 @@ class PygameApplicationTests(unittest.TestCase):
         self.assertIsNone(self.app.session)
         self.assertIsNone(self.app._last_world)
         self.assertTrue(self.app.setup_is_valid)
+
+    def test_goal_completion_pauses_and_replay_reenters_completed_state(self) -> None:
+        registry = create_default_controller_registry()
+        registry.register("delivery", "Delivery", lambda context: _DeliveryController())
+        app = PygameSimulationApp(
+            width=4,
+            height=4,
+            num_robots=1,
+            num_items=1,
+            seed=9,
+            max_steps=32,
+            step_rate=30,
+            controller_registry=registry,
+            initial_controller_key="delivery",
+        )
+        app.initialize()
+        app._start_simulation()
+        session = app.session
+        assert session is not None
+        session.play()
+
+        app.update(2.0)
+
+        self.assertTrue(app._goal_complete())
+        self.assertFalse(session.playing)
+        self.assertLess(session.cursor, session.max_steps)
+        self.assertFalse(app._can_advance_session())
+        completed_cursor = session.cursor
+
+        session.step_back()
+        self.assertFalse(app._goal_complete())
+        self.assertTrue(app._can_advance_session())
+        app._advance_session_once()
+        self.assertEqual(session.cursor, completed_cursor)
+        self.assertTrue(app._goal_complete())
+        self.assertFalse(app._can_advance_session())
 
     def test_slider_arrow_changes_only_the_rate_when_it_has_focus(self) -> None:
         self.app.process_event(self._click(self.app._start_button.rect.center))
@@ -330,6 +389,58 @@ class PygameApplicationTests(unittest.TestCase):
             "raising",
         )
 
+    def test_reload_controllers_preserves_valid_selections(self) -> None:
+        registry = create_default_controller_registry()
+        refreshed = create_default_controller_registry()
+        refreshed.register("new_saved", "MLP · Stage 1", lambda context: _RaisingController())
+        app = PygameSimulationApp(
+            width=4,
+            height=4,
+            num_robots=2,
+            num_items=1,
+            seed=1,
+            max_steps=10,
+            step_rate=5,
+            controller_registry=registry,
+            controller_registry_loader=lambda: refreshed,
+        )
+        app.initialize()
+        app.setup.controller_selectors[0].value = "nearest_item"
+
+        app.process_event(self._click(app._reload_controllers_button.rect.center))
+
+        self.assertIs(app.controller_registry, refreshed)
+        self.assertEqual(app.setup.controller_selectors[0].value, "nearest_item")
+        self.assertIn("new_saved", app.setup.controller_selectors[0].keys)
+
+    def test_saved_controller_limits_are_validated_in_setup(self) -> None:
+        registry = create_default_controller_registry()
+        registry.register(
+            ControllerDefinition(
+                "limited",
+                "Limited MLP",
+                lambda context: _RaisingController(),
+                max_robots=4,
+                max_items=8,
+            )
+        )
+        app = PygameSimulationApp(
+            width=10,
+            height=10,
+            num_robots=5,
+            num_items=1,
+            seed=1,
+            max_steps=10,
+            step_rate=5,
+            controller_registry=registry,
+            initial_controller_key="limited",
+        )
+
+        validation = app.setup.validate()
+
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("at most 4 robots" in error for error in validation.general_errors))
+
     def test_custom_controller_warning_and_scrollable_status_panel(self) -> None:
         self.app.setup.fields["num_robots"].set_text("10")
         self.app.setup.sync_robot_drafts()
@@ -414,7 +525,8 @@ class PygameApplicationTests(unittest.TestCase):
 
         renderer = PygameRenderer(cell_size=60, fps=5)
         try:
-            renderer.render(world)
+            renderer.render(world, ("Policy diagnostics", "Selected: wait"))
+            self.assertGreater(renderer._surface.get_width(), 3 * 60)
         finally:
             renderer.close()
 

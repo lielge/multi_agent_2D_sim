@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 visualization = ["pygame>=2.5,<3"]
+training = ["numpy>=1.26,<3", "torch>=2.2,<3"]
 dev = ["pytest>=8,<9"]
 
 [tool.setuptools.packages.find]
@@ -21,4 +22,3 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
-

@@ -128,6 +128,51 @@ class InitialScenarioTests(unittest.TestCase):
             (((0, 0), 12.5), ((2, 1), 0.0)),
         )
 
+    def test_seeded_scenario_can_start_with_leading_items_delivered(self) -> None:
+        scenario = create_initial_scenario(
+            4,
+            4,
+            1,
+            2,
+            seed=17,
+            initially_delivered_items=1,
+        )
+
+        self.assertEqual(scenario.initially_delivered_items, 1)
+        self.assertEqual(
+            scenario.item_positions[0],
+            scenario.delivery_destination_positions[0],
+        )
+        self.assertNotEqual(
+            scenario.item_positions[1],
+            scenario.delivery_destination_positions[1],
+        )
+        world = scenario.create_world()
+        self.assertEqual(
+            world.get_entity("item_1").position,
+            world.get_entity("destination_1").position,
+        )
+
+    def test_initial_delivery_configuration_is_explicit_and_validated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            create_initial_scenario(
+                3,
+                3,
+                1,
+                1,
+                seed=4,
+                initially_delivered_items=2,
+            )
+        with self.assertRaisesRegex(ValueError, "configured as initially delivered"):
+            InitialScenario(
+                3,
+                3,
+                (),
+                ((0, 0),),
+                2,
+                delivery_destination_positions=((0, 0),),
+            )
+
     def test_action_costs_and_controller_keys_are_preserved(self) -> None:
         costs = ActionBatteryCosts(movement=2, pickup=3, wait=0.5)
         scenario = create_initial_scenario(
@@ -520,7 +565,7 @@ class SimulationSessionTests(unittest.TestCase):
 
         self.assertEqual(
             contexts,
-            [ControllerFactoryContext(seed=73, robot_id="robot_1")],
+            [ControllerFactoryContext(seed=73, robot_id="robot_1", max_steps=200)],
         )
         self.assertEqual(session.controller_key_for("robot_1"), "custom")
         self.assertEqual(session.controller_registry.display_name("custom"), "Custom")

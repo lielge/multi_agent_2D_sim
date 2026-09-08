@@ -297,11 +297,16 @@ class ControllerFactoryContext:
 
     seed: int
     robot_id: str
+    max_steps: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int:
             raise ValueError("seed must be an integer")
         _validate_entity_identifier(self.robot_id, "robot_id")
+        if self.max_steps is not None and (
+            type(self.max_steps) is not int or self.max_steps < 0
+        ):
+            raise ValueError("max_steps must be a non-negative integer or None")
 
 
 ControllerFactory = Callable[[ControllerFactoryContext], RobotController]
@@ -314,12 +319,26 @@ class ControllerDefinition:
     key: str
     display_name: str
     factory: ControllerFactory
+    max_robots: int | None = None
+    max_items: int | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.key, "controller key")
         _validate_identifier(self.display_name, "controller display_name")
         if not callable(self.factory):
             raise ValueError("controller factory must be callable")
+        for field_name in ("max_robots", "max_items"):
+            value = getattr(self, field_name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(
+                    f"{field_name} must be a non-negative integer or None"
+                )
+
+    def supports_scenario(self, robot_count: int, item_count: int) -> bool:
+        return (
+            (self.max_robots is None or robot_count <= self.max_robots)
+            and (self.max_items is None or item_count <= self.max_items)
+        )
 
 
 class ControllerRegistry:
@@ -396,6 +415,11 @@ class ControllerRegistry:
 
     def display_name(self, key: str) -> str:
         return self._get_definition(key).display_name
+
+    def definition(self, key: str) -> ControllerDefinition:
+        """Return the immutable definition registered under ``key``."""
+
+        return self._get_definition(key)
 
     def _get_definition(self, key: str) -> ControllerDefinition:
         try:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 try:
     import pygame
 except ImportError as exc:  # pragma: no cover - depends on optional installation
@@ -51,9 +53,10 @@ class PygameRenderer:
         self._clock = pygame.time.Clock()
         self._surface: pygame.Surface | None = None
         self._font: pygame.font.Font | None = None
-        self._world_size: tuple[int, int] | None = None
+        self._display_signature: tuple[int, int, int] | None = None
         self._cell_size = cell_size
         self._header_height = 32
+        self._diagnostic_width = 360
 
     def process_events(self) -> bool:
         """Return ``False`` when the user closes the window or presses Escape."""
@@ -65,10 +68,15 @@ class PygameRenderer:
                 return False
         return True
 
-    def render(self, world: SimulationWorld) -> None:
+    def render(
+        self,
+        world: SimulationWorld,
+        diagnostic_lines: Sequence[str] = (),
+    ) -> None:
         """Render the current state without advancing ``world``."""
 
-        self._ensure_display(world)
+        lines = tuple(str(line) for line in diagnostic_lines)
+        self._ensure_display(world, len(lines))
         assert self._surface is not None
 
         self._surface.fill(self._BACKGROUND)
@@ -83,6 +91,8 @@ class PygameRenderer:
             self._draw_item(item)
         for robot in world.get_entities(Robot):
             self._draw_robot(robot)
+        if lines:
+            self._draw_diagnostics(world, lines)
 
         pygame.display.flip()
 
@@ -95,6 +105,7 @@ class PygameRenderer:
         pygame.quit()
         self._surface = None
         self._font = None
+        self._display_signature = None
 
     def __enter__(self) -> PygameRenderer:
         return self
@@ -102,12 +113,16 @@ class PygameRenderer:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _ensure_display(self, world: SimulationWorld) -> None:
-        world_size = (world.width, world.height)
-        if self._surface is not None and world_size == self._world_size:
+    def _ensure_display(self, world: SimulationWorld, diagnostic_lines: int) -> None:
+        signature = (world.width, world.height, diagnostic_lines)
+        if self._surface is not None and signature == self._display_signature:
             return
 
-        horizontal_limit = max(4, self._max_window_size // world.width)
+        diagnostic_width = self._diagnostic_width if diagnostic_lines else 0
+        horizontal_limit = max(
+            4,
+            max(100, self._max_window_size - diagnostic_width) // world.width,
+        )
         vertical_limit = max(
             4,
             (self._max_window_size - self._header_height) // world.height,
@@ -117,15 +132,37 @@ class PygameRenderer:
             horizontal_limit,
             vertical_limit,
         )
+        grid_width = world.width * self._cell_size
+        grid_height = world.height * self._cell_size + self._header_height
+        diagnostic_height = self._header_height + diagnostic_lines * 18 + 12
         window_size = (
-            world.width * self._cell_size,
-            world.height * self._cell_size + self._header_height,
+            grid_width + diagnostic_width,
+            max(grid_height, diagnostic_height),
         )
         self._surface = pygame.display.set_mode(window_size)
-        self._world_size = world_size
+        self._display_signature = signature
         font_size = max(10, min(16, self._cell_size // 2))
         self._font = pygame.font.Font(None, font_size)
         pygame.display.set_caption("Multi-Agent 2D Simulation")
+
+    def _draw_diagnostics(
+        self,
+        world: SimulationWorld,
+        lines: Sequence[str],
+    ) -> None:
+        assert self._surface is not None
+        assert self._font is not None
+        panel_x = world.width * self._cell_size
+        pygame.draw.line(
+            self._surface,
+            self._GRID,
+            (panel_x, 0),
+            (panel_x, self._surface.get_height()),
+            width=1,
+        )
+        for index, line in enumerate(lines):
+            text = self._font.render(line, True, self._TEXT)
+            self._surface.blit(text, (panel_x + 10, 10 + index * 18))
 
     def _draw_header(self, world: SimulationWorld) -> None:
         assert self._surface is not None

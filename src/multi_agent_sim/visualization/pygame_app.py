@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 import random
+from collections.abc import Callable, Mapping
 from typing import Literal, Sequence
 
 import pygame
@@ -12,8 +13,10 @@ import pygame
 from multi_agent_sim.actions import ActionBatteryCosts
 from multi_agent_sim.controllers import (
     ControllerRegistry,
+    WorldObservation,
     create_default_controller_registry,
 )
+from multi_agent_sim.episode import delivery_status
 from multi_agent_sim.entities import DeliveryDestination, Item, Robot
 from multi_agent_sim.session import (
     InitialScenario,
@@ -143,6 +146,8 @@ class InitializationState:
             ("random", "Random"),
             ("nearest_item", "Nearest Item"),
         ),
+        controller_limits: Mapping[str, tuple[int | None, int | None]] | None = None,
+        default_controller_key: str | None = None,
         drop_cost: float = 1,
     ) -> None:
         self.fields: dict[str, TextInput] = {
@@ -178,8 +183,11 @@ class InitializationState:
             raise ValueError("controller_choices cannot be empty")
         choice_keys = tuple(key for key, _ in self.controller_choices)
         self._default_controller_key = (
-            "random" if "random" in choice_keys else choice_keys[0]
+            default_controller_key
+            if default_controller_key in choice_keys
+            else ("random" if "random" in choice_keys else choice_keys[0])
         )
+        self.controller_limits = dict(controller_limits or {})
         # Selectors are retained when the count shrinks so growing it again
         # restores prior per-robot assignments instead of silently resetting.
         self.controller_selectors: list[ChoiceSelector] = []
@@ -192,6 +200,32 @@ class InitializationState:
         self._preview_scenario: InitialScenario | None = None
         self._preview_error: str | None = None
         self.sync_robot_drafts()
+
+    def replace_controller_choices(
+        self,
+        choices: Sequence[tuple[str, str]],
+        limits: Mapping[str, tuple[int | None, int | None]] | None = None,
+    ) -> None:
+        """Replace catalog choices while preserving still-valid selections."""
+
+        normalized = tuple(choices)
+        if not normalized:
+            raise ValueError("controller choices cannot be empty")
+        keys = tuple(key for key, _ in normalized)
+        previous = tuple(selector.value for selector in self.controller_selectors)
+        self.controller_choices = normalized
+        self.controller_limits = dict(limits or {})
+        if self._default_controller_key not in keys:
+            self._default_controller_key = "random" if "random" in keys else keys[0]
+        self.controller_selectors = [
+            ChoiceSelector(
+                normalized,
+                value=value if value in keys else self._default_controller_key,
+            )
+            for value in previous
+        ]
+        self.sync_robot_drafts()
+        self.invalidate_preview()
 
     def invalidate_preview(self) -> None:
         self._preview_key = None
@@ -336,6 +370,29 @@ class InitializationState:
                 controller_keys = tuple(
                     selector.value for selector in self.controller_selectors[:count]
                 )
+                if counts_ready:
+                    for key in dict.fromkeys(controller_keys):
+                        maximums = self.controller_limits.get(key)
+                        if maximums is None:
+                            continue
+                        max_robots, max_items = maximums
+                        if (
+                            (max_robots is not None and count > max_robots)
+                            or (
+                                max_items is not None
+                                and values["num_items"] > max_items
+                            )
+                        ):
+                            result.general_errors.append(
+                                f"Selected controller supports at most "
+                                f"{max_robots} robots and {max_items} items."
+                            )
+                    if any(key in self.controller_limits for key in controller_keys) and values.get(
+                        "max_steps", 0
+                    ) <= 0:
+                        result.general_errors.append(
+                            "Saved neural controllers require Maximum steps to be positive."
+                        )
         if self.robot_mode == "manual" and "num_robots" in values:
             count = values["num_robots"]
             if len(self.robot_drafts) != count:
@@ -528,6 +585,8 @@ class PygameSimulationApp:
         pickup_cost: float = 1,
         wait_cost: float = 0,
         controller_registry: ControllerRegistry | None = None,
+        controller_registry_loader: Callable[[], ControllerRegistry] | None = None,
+        initial_controller_key: str | None = None,
         drop_cost: float = 1,
     ) -> None:
         if type(step_rate) is not int or not 1 <= step_rate <= 30:
@@ -538,12 +597,22 @@ class PygameSimulationApp:
             if controller_registry is None
             else controller_registry
         )
+        if controller_registry_loader is not None and not callable(
+            controller_registry_loader
+        ):
+            raise ValueError("controller_registry_loader must be callable or None")
+        self._controller_registry_loader = controller_registry_loader
         controller_choices = tuple(
             (definition.key, definition.display_name)
             for definition in self.controller_registry.definitions
         )
         if not controller_choices:
             raise ValueError("controller_registry must contain at least one controller")
+        controller_limits = {
+            definition.key: (definition.max_robots, definition.max_items)
+            for definition in self.controller_registry.definitions
+            if definition.max_robots is not None or definition.max_items is not None
+        }
 
         self.setup = InitializationState(
             width=width,
@@ -557,6 +626,8 @@ class PygameSimulationApp:
             drop_cost=drop_cost,
             wait_cost=wait_cost,
             controller_choices=controller_choices,
+            controller_limits=controller_limits,
+            default_controller_key=initial_controller_key,
         )
         self.show_labels = bool(show_labels)
         self.session: SimulationSession | None = None
@@ -587,6 +658,7 @@ class PygameSimulationApp:
         self._random_button = Button("Random")
         self._manual_button = Button("Manual")
         self._reroll_button = Button("Reroll")
+        self._reload_controllers_button = Button("Reload controllers")
         self._start_button = Button("Start simulation", primary=True)
         self._back_button = Button("Back")
         self._play_button = Button("Play", primary=True)
@@ -603,7 +675,7 @@ class PygameSimulationApp:
         self._status_panel = pygame.Rect(0, 0, 1, 1)
         self._status_view = pygame.Rect(0, 0, 1, 1)
         self._status_scroll_offset = 0
-        self._status_row_height = 88
+        self._status_row_height = 108
 
     @property
     def setup_is_valid(self) -> bool:
@@ -691,11 +763,11 @@ class PygameSimulationApp:
         # process is suspended, while leaving any unprocessed time queued.
         steps_this_frame = 0
         while self._accumulator + 1e-12 >= interval and steps_this_frame < 120:
-            if not session.can_step_forward:
+            if not self._can_advance_session():
                 session.pause()
                 self._accumulator = 0.0
                 break
-            session.step_forward()
+            self._advance_session_once()
             self._accumulator -= interval
             steps_this_frame += 1
             if not session.playing:
@@ -765,6 +837,9 @@ class PygameSimulationApp:
         mode_y = inner.y + 24 + len(field_rows) * row_height + 2
         self._random_button.rect = pygame.Rect(inner.x, mode_y + 20, 94, 32)
         self._manual_button.rect = pygame.Rect(inner.x + 100, mode_y + 20, 94, 32)
+        self._reload_controllers_button.rect = pygame.Rect(
+            inner.right - 200, mode_y + 20, 112, 32
+        )
         self._reroll_button.rect = pygame.Rect(inner.right - 82, mode_y + 20, 82, 32)
 
         footer_height = 104
@@ -902,6 +977,8 @@ class PygameSimulationApp:
             self.setup.set_robot_mode("manual")
         if self._reroll_button.handle_event(event):
             self.setup.reroll()
+        if self._reload_controllers_button.handle_event(event):
+            self._reload_controller_registry()
 
         validation = self.setup.validate()
         self._start_button.enabled = validation.valid
@@ -985,8 +1062,9 @@ class PygameSimulationApp:
             return
 
         self._back_button.enabled = session.can_step_back
-        self._forward_button.enabled = session.can_step_forward
-        self._play_button.enabled = session.can_step_forward
+        can_advance = self._can_advance_session()
+        self._forward_button.enabled = can_advance
+        self._play_button.enabled = can_advance
         controls_have_focus = self._rate_slider.focused or any(
             button.enabled and button.focused
             for button in (
@@ -997,16 +1075,16 @@ class PygameSimulationApp:
             )
         )
         if event.type == pygame.KEYDOWN and not controls_have_focus:
-            if event.key == pygame.K_SPACE and session.can_step_forward:
+            if event.key == pygame.K_SPACE and can_advance:
                 session.toggle_playing()
                 self._accumulator = 0.0
             elif event.key == pygame.K_LEFT and session.can_step_back:
                 session.pause()
                 session.step_back()
                 self._accumulator = 0.0
-            elif event.key == pygame.K_RIGHT and session.can_step_forward:
+            elif event.key == pygame.K_RIGHT and can_advance:
                 session.pause()
-                session.step_forward()
+                self._advance_session_once()
                 self._accumulator = 0.0
 
         if self._back_button.handle_event(event):
@@ -1018,7 +1096,7 @@ class PygameSimulationApp:
             self._accumulator = 0.0
         if self._forward_button.handle_event(event):
             session.pause()
-            session.step_forward()
+            self._advance_session_once()
             self._accumulator = 0.0
         if self._new_setup_button.handle_event(event):
             self._return_to_setup()
@@ -1084,6 +1162,48 @@ class PygameSimulationApp:
         self._status_scroll_offset = 0
         pygame.display.set_caption("Multi-Agent 2D Simulation")
         self._layout_simulation()
+
+    def _goal_complete(self) -> bool:
+        if self.session is None:
+            return False
+        observation = WorldObservation.from_world(self.session.world)
+        return delivery_status(observation).success
+
+    def _can_advance_session(self) -> bool:
+        return bool(
+            self.session is not None
+            and self.session.can_step_forward
+            and not self._goal_complete()
+        )
+
+    def _advance_session_once(self) -> None:
+        if not self._can_advance_session() or self.session is None:
+            return
+        self.session.step_forward()
+        if self._goal_complete():
+            self.session.pause()
+            self._accumulator = 0.0
+
+    def _reload_controller_registry(self) -> None:
+        if self._controller_registry_loader is None:
+            return
+        registry = self._controller_registry_loader()
+        if not isinstance(registry, ControllerRegistry) or not registry.definitions:
+            raise ValueError(
+                "controller registry loader must return a non-empty ControllerRegistry"
+            )
+        self.controller_registry = registry
+        choices = tuple(
+            (definition.key, definition.display_name)
+            for definition in registry.definitions
+        )
+        limits = {
+            definition.key: (definition.max_robots, definition.max_items)
+            for definition in registry.definitions
+            if definition.max_robots is not None or definition.max_items is not None
+        }
+        self.setup.replace_controller_choices(choices, limits)
+        self._layout_setup()
 
     def _return_to_setup(self) -> None:
         if self.session is not None:
@@ -1151,6 +1271,12 @@ class PygameSimulationApp:
         self._manual_button.primary = self.setup.robot_mode == "manual"
         self._random_button.draw(self.surface, self._small_font, mouse)
         self._manual_button.draw(self.surface, self._small_font, mouse)
+        self._reload_controllers_button.enabled = (
+            self._controller_registry_loader is not None
+        )
+        self._reload_controllers_button.draw(
+            self.surface, self._small_font, mouse
+        )
         self._reroll_button.draw(self.surface, self._small_font, mouse)
 
         self._draw_manual_rows(validation)
@@ -1388,8 +1514,9 @@ class PygameSimulationApp:
             (self.surface.get_width(), self._TOOLBAR_HEIGHT - 1),
         )
         self._back_button.enabled = session.can_step_back
-        self._forward_button.enabled = session.can_step_forward
-        self._play_button.enabled = session.can_step_forward
+        can_advance = self._can_advance_session()
+        self._forward_button.enabled = can_advance
+        self._play_button.enabled = can_advance
         self._play_button.label = "Pause" if session.playing else "Play"
         self._back_button.draw(self.surface, self._small_font, mouse)
         self._play_button.draw(self.surface, self._small_font, mouse)
@@ -1417,8 +1544,13 @@ class PygameSimulationApp:
             )
             for destination in destinations
         )
-        status = "Running" if session.playing else "Paused"
-        status_color = (36, 130, 82) if session.playing else PALETTE.text_muted
+        complete = self._goal_complete()
+        status = (
+            "All items delivered"
+            if complete
+            else ("Running" if session.playing else "Paused")
+        )
+        status_color = (36, 130, 82) if (session.playing or complete) else PALETTE.text_muted
         draw_text(
             self.surface,
             self._small_font,
@@ -1431,7 +1563,7 @@ class PygameSimulationApp:
             self._small_font,
             f"Step {session.cursor}  |  Recorded through {session.history_length}  |  "
             f"Maximum {session.max_steps}",
-            (96, 67),
+            (20 + self._small_font.size(status)[0] + 16, 67),
             color=PALETTE.text,
         )
         counts = (
@@ -1506,18 +1638,30 @@ class PygameSimulationApp:
             draw_text(
                 self.surface,
                 self._small_font,
-                f"{robot.robot_id}   Battery: {battery}",
+                f"{robot.robot_id}   Battery: {battery}   Carrying: "
+                f"{getattr(robot, 'carried_item_id', None) or 'empty'}",
                 (row.x + 8, row.y + 7),
             )
 
             controller_name = session.controller_display_name_for(robot.robot_id)
-            carried_item_id = getattr(robot, "carried_item_id", None)
-            carried = carried_item_id if carried_item_id is not None else "empty"
             draw_text(
                 self.surface,
                 self._small_font,
-                f"{controller_name}   Carrying: {carried}",
+                controller_name,
                 (row.x + 8, row.y + 28),
+                color=PALETTE.text_muted,
+            )
+            controller_key = session.controller_key_for(robot.robot_id)
+            visible_key = (
+                controller_key
+                if len(controller_key) <= 42
+                else f"{controller_key[:39]}..."
+            )
+            draw_text(
+                self.surface,
+                self._small_font,
+                f"ID: {visible_key}",
+                (row.x + 8, row.y + 49),
                 color=PALETTE.text_muted,
             )
 
@@ -1527,7 +1671,7 @@ class PygameSimulationApp:
                     self.surface,
                     self._small_font,
                     f"Warning: {warning}",
-                    pygame.Rect(row.x + 8, row.y + 49, row.width - 16, 30),
+                    pygame.Rect(row.x + 8, row.y + 69, row.width - 16, 30),
                     color=PALETTE.error,
                     line_gap=1,
                     max_lines=2,
@@ -1741,6 +1885,8 @@ def run_pygame_application(
     pickup_cost: float = 1,
     wait_cost: float = 0,
     controller_registry: ControllerRegistry | None = None,
+    controller_registry_loader: Callable[[], ControllerRegistry] | None = None,
+    initial_controller_key: str | None = None,
     drop_cost: float = 1,
 ) -> SimulationWorld | None:
     """Convenience wrapper around :class:`PygameSimulationApp`."""
@@ -1759,6 +1905,8 @@ def run_pygame_application(
         drop_cost=drop_cost,
         wait_cost=wait_cost,
         controller_registry=controller_registry,
+        controller_registry_loader=controller_registry_loader,
+        initial_controller_key=initial_controller_key,
     ).run()
 
 

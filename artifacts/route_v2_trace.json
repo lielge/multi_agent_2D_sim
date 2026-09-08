@@ -1,0 +1,851 @@
+{
+  "checkpoint": "artifacts\\shared_mlp_route_v2_best.pt",
+  "final_metrics": {
+    "battery_consumed": 13.0,
+    "cumulative_reward": 0.9152083333333333,
+    "delivered_fraction": 1.0,
+    "delivered_items": 1,
+    "delivery_cost": -1.0,
+    "elapsed_steps": 13,
+    "energy_cost": 0.065,
+    "failure_cost": 0.0,
+    "initial_normalized_item_distance": 1.8333333333333333,
+    "item_progress_cost": -0.18333333333333335,
+    "max_energy": 100.0,
+    "max_steps": 32,
+    "normalized_item_distance": 0.0,
+    "success": true,
+    "terminated": true,
+    "time_cost": 0.203125,
+    "timed_out": false,
+    "total_cost": -0.9152083333333334,
+    "total_items": 1,
+    "undelivered_cost": 0.0,
+    "undelivered_fraction": 0.0,
+    "undelivered_items": 0
+  },
+  "inspected_robot": "robot_1",
+  "seed": 1000000,
+  "stage": 1,
+  "steps": [
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.8189504146575928,
+          "legal_mask": [
+            false,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false
+          ],
+          "probabilities": [
+            0.0,
+            0.5512360891297691,
+            0.4133236378882148,
+            0.03364972746318283,
+            0.0,
+            0.0017905455188332968,
+            0.0
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_down",
+          "selected_action_index": 1,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 1.0,
+        "cumulative_reward": -0.0039583333333333475,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 1,
+        "energy_cost": 0.005,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.016666666666666653,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 1.6666666666666667,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.015625,
+        "timed_out": false,
+        "total_cost": 0.003958333333333348,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666653,
+        "time": -0.015625,
+        "total": -0.0039583333333333475,
+        "undelivered": 0.0
+      },
+      "step": 1
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.9506264328956604,
+          "legal_mask": [
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false
+          ],
+          "probabilities": [
+            0.038447838892974394,
+            0.3829709723919913,
+            0.542931558406401,
+            0.033788021744040435,
+            0.0,
+            0.0018616085645929337,
+            0.0
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_left",
+          "selected_action_index": 2,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 2.0,
+        "cumulative_reward": -0.007916666666666674,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 2,
+        "energy_cost": 0.01,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.033333333333333326,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 1.5,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.03125,
+        "timed_out": false,
+        "total_cost": 0.007916666666666676,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666673,
+        "time": -0.015625,
+        "total": -0.003958333333333327,
+        "undelivered": 0.0
+      },
+      "step": 2
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 1.117689847946167,
+          "legal_mask": [
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false
+          ],
+          "probabilities": [
+            0.059653591864632746,
+            0.4795645217560983,
+            0.37042343926970933,
+            0.08769685103490171,
+            0.0,
+            0.002661596074657854,
+            0.0
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_down",
+          "selected_action_index": 1,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 3.0,
+        "cumulative_reward": -0.011875,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 3,
+        "energy_cost": 0.015,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.05,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 1.3333333333333333,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.046875,
+        "timed_out": false,
+        "total_cost": 0.011874999999999997,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666673,
+        "time": -0.015625,
+        "total": -0.003958333333333327,
+        "undelivered": 0.0
+      },
+      "step": 3
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 1.2341258525848389,
+          "legal_mask": [
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false
+          ],
+          "probabilities": [
+            0.13457869735899178,
+            0.29575561128884553,
+            0.46611859986328247,
+            0.10062493939141524,
+            0.0,
+            0.0029221520974650156,
+            0.0
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_left",
+          "selected_action_index": 2,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 4.0,
+        "cumulative_reward": -0.01583333333333335,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 4,
+        "energy_cost": 0.02,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.06666666666666665,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 1.1666666666666667,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.0625,
+        "timed_out": false,
+        "total_cost": 0.015833333333333352,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666653,
+        "time": -0.015625,
+        "total": -0.0039583333333333475,
+        "undelivered": 0.0
+      },
+      "step": 4
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 1.1028661727905273,
+          "legal_mask": [
+            true,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false
+          ],
+          "probabilities": [
+            0.25480158940415903,
+            0.42301625027250034,
+            0.0,
+            0.3172210083425014,
+            0.0,
+            0.004961151980839251,
+            0.0
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_down",
+          "selected_action_index": 1,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 5.0,
+        "cumulative_reward": -0.019791666666666676,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 5,
+        "energy_cost": 0.025,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.08333333333333333,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 1.0,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.078125,
+        "timed_out": false,
+        "total_cost": 0.019791666666666666,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666673,
+        "time": -0.015625,
+        "total": -0.003958333333333327,
+        "undelivered": 0.0
+      },
+      "step": 5
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.0025286185555160046,
+          "legal_mask": [
+            true,
+            false,
+            false,
+            true,
+            true,
+            true,
+            false
+          ],
+          "probabilities": [
+            0.00015868636238457133,
+            0.0,
+            0.0,
+            9.355488691850994e-05,
+            0.9997463628194886,
+            1.3959312083810915e-06,
+            0.0
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "pick_up",
+          "selected_action_index": 4,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 6.0,
+        "cumulative_reward": -0.04041666666666668,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 6,
+        "energy_cost": 0.03,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.08333333333333333,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 1.0,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.09375,
+        "timed_out": false,
+        "total_cost": 0.04041666666666667,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.0,
+        "time": -0.015625,
+        "total": -0.020625,
+        "undelivered": 0.0
+      },
+      "step": 6
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.7672723531723022,
+          "legal_mask": [
+            true,
+            false,
+            false,
+            true,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.7094034240814168,
+            0.0,
+            0.0,
+            0.21952757764704753,
+            0.0,
+            0.0004913352097525445,
+            0.0705776630617832
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_up",
+          "selected_action_index": 0,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 7.0,
+        "cumulative_reward": -0.04437500000000001,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 7,
+        "energy_cost": 0.035,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.09999999999999999,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.8333333333333334,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.109375,
+        "timed_out": false,
+        "total_cost": 0.04437500000000001,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666663,
+        "time": -0.015625,
+        "total": -0.003958333333333337,
+        "undelivered": 0.0
+      },
+      "step": 7
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.9251325130462646,
+          "legal_mask": [
+            true,
+            true,
+            false,
+            true,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.5551830879501601,
+            0.0023887144973385364,
+            0.0,
+            0.3559688851704335,
+            0.0,
+            0.0008265953449037373,
+            0.08563271703716409
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_up",
+          "selected_action_index": 0,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 8.0,
+        "cumulative_reward": -0.04833333333333334,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 8,
+        "energy_cost": 0.04,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.11666666666666665,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.6666666666666666,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.125,
+        "timed_out": false,
+        "total_cost": 0.04833333333333335,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666673,
+        "time": -0.015625,
+        "total": -0.003958333333333327,
+        "undelivered": 0.0
+      },
+      "step": 8
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.9767639636993408,
+          "legal_mask": [
+            true,
+            true,
+            false,
+            true,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.3534519696259189,
+            0.006851106462693328,
+            0.0,
+            0.5369155443204918,
+            0.0,
+            0.0013688218406624705,
+            0.10141255775023349
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_right",
+          "selected_action_index": 3,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 9.0,
+        "cumulative_reward": -0.052291666666666674,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 9,
+        "energy_cost": 0.045,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.13333333333333333,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.5,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.140625,
+        "timed_out": false,
+        "total_cost": 0.05229166666666665,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666663,
+        "time": -0.015625,
+        "total": -0.003958333333333337,
+        "undelivered": 0.0
+      },
+      "step": 9
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 1.0284481048583984,
+          "legal_mask": [
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.36596244183661936,
+            0.007227576849326343,
+            0.0046613191759775,
+            0.5070107938096117,
+            0.0,
+            0.0011977926744448425,
+            0.1139400756540203
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_right",
+          "selected_action_index": 3,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 10.0,
+        "cumulative_reward": -0.05625,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 10,
+        "energy_cost": 0.05,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.15000000000000002,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.3333333333333333,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.15625,
+        "timed_out": false,
+        "total_cost": 0.05624999999999997,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.01666666666666667,
+        "time": -0.015625,
+        "total": -0.00395833333333333,
+        "undelivered": 0.0
+      },
+      "step": 10
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 1.147923231124878,
+          "legal_mask": [
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.44108472106230034,
+            0.010998770802025784,
+            0.013648655522973532,
+            0.36233050314448095,
+            0.0,
+            0.001398026736741924,
+            0.17053932273147748
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_up",
+          "selected_action_index": 0,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 11.0,
+        "cumulative_reward": -0.060208333333333336,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 11,
+        "energy_cost": 0.055,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.16666666666666666,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.16666666666666666,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.171875,
+        "timed_out": false,
+        "total_cost": 0.060208333333333336,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666666,
+        "time": -0.015625,
+        "total": -0.003958333333333334,
+        "undelivered": 0.0
+      },
+      "step": 11
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.9722295999526978,
+          "legal_mask": [
+            false,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.0,
+            0.06470579958301306,
+            0.030466185452921655,
+            0.5980126542967177,
+            0.0,
+            0.0034113430159844666,
+            0.30340401765136316
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "move_right",
+          "selected_action_index": 3,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 12.0,
+        "cumulative_reward": -0.06416666666666666,
+        "delivered_fraction": 0.0,
+        "delivered_items": 0,
+        "delivery_cost": 0.0,
+        "elapsed_steps": 12,
+        "energy_cost": 0.06,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.18333333333333335,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.0,
+        "success": false,
+        "terminated": false,
+        "time_cost": 0.1875,
+        "timed_out": false,
+        "total_cost": 0.06416666666666665,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 1.0,
+        "undelivered_items": 1
+      },
+      "reward_components": {
+        "delivery": 0.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.016666666666666666,
+        "time": -0.015625,
+        "total": -0.003958333333333334,
+        "undelivered": 0.0
+      },
+      "step": 12
+    },
+    {
+      "decisions": {
+        "robot_1": {
+          "entropy": 0.9260106086730957,
+          "legal_mask": [
+            false,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true
+          ],
+          "probabilities": [
+            0.0,
+            0.16416397201526248,
+            0.18900283607832086,
+            0.0,
+            0.0,
+            0.005712300368776907,
+            0.6411208915376397
+          ],
+          "robot_id": "robot_1",
+          "selected_action": "drop",
+          "selected_action_index": 6,
+          "stochastic": false
+        }
+      },
+      "metrics": {
+        "battery_consumed": 13.0,
+        "cumulative_reward": 0.9152083333333333,
+        "delivered_fraction": 1.0,
+        "delivered_items": 1,
+        "delivery_cost": -1.0,
+        "elapsed_steps": 13,
+        "energy_cost": 0.065,
+        "failure_cost": 0.0,
+        "initial_normalized_item_distance": 1.8333333333333333,
+        "item_progress_cost": -0.18333333333333335,
+        "max_energy": 100.0,
+        "max_steps": 32,
+        "normalized_item_distance": 0.0,
+        "success": true,
+        "terminated": true,
+        "time_cost": 0.203125,
+        "timed_out": false,
+        "total_cost": -0.9152083333333334,
+        "total_items": 1,
+        "undelivered_cost": 0.0,
+        "undelivered_fraction": 0.0,
+        "undelivered_items": 0
+      },
+      "reward_components": {
+        "delivery": 1.0,
+        "energy": -0.005,
+        "failure": 0.0,
+        "item_progress": 0.0,
+        "time": -0.015625,
+        "total": 0.979375,
+        "undelivered": 0.0
+      },
+      "step": 13
+    }
+  ]
+}

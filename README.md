@@ -4,7 +4,8 @@ A small, modular foundation for multi-agent experiments on a discrete 2D grid.
 It provides deterministic world transitions, battery-aware movement, item
 pickup and drop, reversible delivery destinations, immutable controller
 observations, pluggable robot policies, and an optional interactive Pygame
-application.
+application. Trained shared-MLP policies can be published into a local
+controller catalog and selected like the built-in policies.
 
 ## Installation
 
@@ -19,19 +20,20 @@ PowerShell:
 
 ```powershell
 .venv\Scripts\Activate.ps1
-python -m pip install -e ".[visualization,dev]"
+python -m pip install -e ".[visualization,training,dev]"
 ```
 
 macOS or Linux:
 
 ```bash
 source .venv/bin/activate
-python -m pip install -e ".[visualization,dev]"
+python -m pip install -e ".[visualization,training,dev]"
 ```
 
-The simulation core has no runtime dependencies. For a headless-only install,
-use `python -m pip install -e .`. The `visualization` extra adds Pygame and the
-`dev` extra adds pytest.
+The simulation core, episode scorer, and fixed-slot environment have no runtime
+dependencies. For a headless-only install, use `python -m pip install -e .`.
+The `visualization` extra adds Pygame, `training` adds NumPy and PyTorch, and
+`dev` adds pytest.
 
 ## Quick start
 
@@ -47,8 +49,10 @@ counts, seed, maximum number of steps, and the nonnegative **Move**, **Pickup**,
 for every item. You can generate robot positions or
 configure each robot's position and initial battery manually. In either
 placement mode, each robot has its own controller selector. The built-ins are
-**Random** and the deterministic **Nearest Item** test controller; custom
-runnable registry entries appear in the same selectors automatically.
+**Random** and the deterministic **Nearest Item** test controller; valid saved
+neural controllers from `controllers/` appear after them. Click **Reload
+controllers** to rescan that directory without losing selections that are
+still valid.
 
 In manual mode, select a robot row and click a cell in the preview to place it.
 Items and destinations are generated from the seed; robots, items, and
@@ -89,6 +93,34 @@ maximum step and `--fps` is the initial step rate, which must be between 1 and
 30. In headless mode, `--steps` is the number of steps to execute and `--fps`
 is ignored; scenario creation, controllers, action costs, and world transitions
 otherwise use the same path as the visual application.
+
+List the saved neural controllers and their stable IDs:
+
+```powershell
+.\.venv\Scripts\python.exe examples\train_mlp.py controllers list
+```
+
+Open the setup screen with the catalog available for independent per-robot
+selection:
+
+```powershell
+.\.venv\Scripts\python.exe examples\basic_simulation.py `
+  --controllers-dir controllers
+```
+
+To initialize every robot with one catalog entry, copy its `controller_id`
+from the list command:
+
+```powershell
+.\.venv\Scripts\python.exe examples\basic_simulation.py `
+  --controllers-dir controllers `
+  --controller <controller-id>
+```
+
+Add `--headless` for a nonvisual run. Saved policies use masked, greedy CPU
+inference by default; `--controller-device auto` or
+`--controller-device cuda` changes the device. They support at most four
+robots and eight items, matching the training encoding.
 
 Create and step a world programmatically:
 
@@ -170,6 +202,15 @@ world = generate_random_world(
   initial world and replaying recorded action batches.
 - `generation.py` creates scenarios with a private seeded random generator and
   globally unique initial positions.
+- `episode.py` scores immutable before/after observations and action results,
+  and provides a headless episode runner without changing world semantics.
+- `training_env.py` contains the dependency-free 4-robot/8-item encoder,
+  one-hot command boundary, and training environment.
+- `learning.py` is an optional PyTorch-only layer containing the shared MLP,
+  per-robot learned controllers, REINFORCE trainer, and curriculum helpers.
+- `controller_catalog.py` discovers and validates dependency-free immutable
+  controller manifests, while `saved_mlp_controllers.py` provides the optional
+  PyTorch session adapter.
 - `visualization/` contains the optional Pygame renderer, interactive setup UI,
   controller/status controls, and timeline application. The core package never
   imports Pygame.
@@ -330,11 +371,241 @@ session = SimulationSession(
 )
 ```
 
-The package does not add an ML framework, training loop, HTTP or subprocess
-transport, or asynchronous inference. Those concerns stay inside custom
-controller adapters. Future extensions can add partial observations, rewards,
-transfer actions, or local belief state without coupling
-decision-making to rendering or world mutation.
+These rule-based controller interfaces are unchanged. Learned controllers use
+the separate fixed-slot environment described below and return length-seven
+one-hot commands; the environment validates and decodes those commands before
+the episode runner calls `SimulationWorld.step()`.
+
+## External episode cost and reward
+
+Episode scoring is deliberately outside `SimulationWorld` and
+`SimulationSession`. `TeamCostEvaluator` consumes immutable observations plus
+the `ActionResult` mapping produced by a transition. `EpisodeRunner` is a small
+headless composition helper; it owns a fresh scenario world but delegates all
+scoring to the evaluator.
+
+The default accrued/final episode cost is:
+
+```text
+C = 10 F + 2 U + 0.5 (T / T_max) + 0.5 (E / E_max)
+    + 0.1 (R_final - R_initial)
+    + 1.0 (Q_initial - Q_final)
+```
+
+`F` is one for an unsuccessful terminal episode, `U` is the final undelivered
+fraction, `T` counts simultaneous team steps once, and `E` is the sum of actual
+`ActionResult.battery_spent` values. `Q` is the fraction of items currently at
+their own destinations. `R` is a route potential, normalized by the grid's
+maximum Manhattan distance and averaged across items: a delivered item is
+zero, a carried item uses carrier-to-destination distance, and an uncarried
+item uses nearest-robot-to-item plus item-to-destination distance. All six
+coefficients are configurable through `EpisodeCostWeights`; `item_progress`
+defaults to `0.1` and `delivery` defaults to `1.0`.
+
+Each transition receives the shared reward:
+
+```text
+r_t = -time_weight / T_max
+      -energy_weight * delta_E_t / E_max
+      +item_progress_weight * (R_previous - R_next)
+      +delivery_weight * (Q_next - Q_previous)
+```
+
+The failure and undelivered components are also subtracted on a terminal
+failure. If initial team battery is zero, the normalized energy term is zero.
+Success is checked before timeout, so delivery on the final allowed step
+succeeds. With no items, an episode is immediately successful with zero cost.
+An item counts as delivered only while it is physically located at its own
+destination. Placing it there earns delivery credit; picking it up removes the
+same credit. Wrong drops receive no delivery credit. Approaching an
+uncarried item and carrying it toward its destination both improve the route
+potential. All route and delivery terms are signed potentials, so reversible
+movement and delivery/removal cycles have zero net reward.
+
+Run a small successful scored episode and inspect every metric:
+
+```bash
+python examples/scored_episode.py
+```
+
+Programmatic use keeps action selection outside the runner:
+
+```python
+from multi_agent_sim import Action, EpisodeRunner, create_initial_scenario
+
+scenario = create_initial_scenario(6, 6, 1, 1, seed=42)
+episode = EpisodeRunner(scenario, max_steps=64)
+while not episode.terminated:
+    transition = episode.step({"robot_1": Action.WAIT})
+    print(transition.reward, transition.metrics.total_cost)
+```
+
+The sum of undiscounted rewards equals `-metrics.total_cost`. A discounted
+training return (`gamma < 1`) does not retain that equality.
+
+## Fixed-slot MLP training
+
+`FixedSlotTeamEnv` wraps `EpisodeRunner` without NumPy or Torch. It rejects
+scenarios above four robots or eight items and encodes four robot-specific rows
+of 155 values. Stable logical item slots include destination coordinates,
+on-grid/delivered/carried state, and carrier identity; padded robot and item
+slots include presence flags and are zero-filled. Each active row appends the
+controlled robot's four-way identity.
+
+The checkpoint-stable command order is:
+
+```text
+0 up, 1 down, 2 left, 3 right, 4 pick up, 5 wait, 6 drop
+```
+
+The optional shared model is exactly `155 -> 128 -> 128 -> 7`, with ReLU after
+each hidden layer. One `MLPRobotController` is created per robot and all share
+the same model. A controller samples during training, uses argmax during greedy
+evaluation, and returns only its own immutable one-hot command. Advisory legal
+action masks are enabled by default and can be disabled. The learned-policy
+mask protects a correctly delivered item from `Pick Up`; the underlying
+simulator action remains legal for unmasked and rule-based controllers.
+
+Train with the eight-stage curriculum and the default one-hour budget:
+
+```bash
+python examples/train_mlp.py train
+```
+
+For a short pipeline check:
+
+```bash
+python examples/train_mlp.py train --minutes 0.1 --max-stages 1 \
+  --evaluation-interval 10 --evaluation-episodes 5
+```
+
+The curriculum is:
+
+| Stage | Grid | Robots | Items | Initially delivered | `T_max` |
+|---|---:|---:|---:|---:|---:|
+| 1 | 4x4 | 1 | 1 | 0 | 32 |
+| 2 | 4x4 | 1 | 2 | 1 | 64 |
+| 3 | 4x4 | 1 | 2 | 0 | 64 |
+| 4 | 5x5 | 1 | 2 | 0 | 64 |
+| 5 | 6x6 | 2 | 2 | 0 | 64 |
+| 6 | 8x8 | 2 | 4 | 0 | 128 |
+| 7 | 10x10 | 4 | 4 | 0 | 160 |
+| 8 | 12x12 | 4 | 8 | 0 | 256 |
+
+Stage 2 explicitly teaches the policy to leave one completed delivery alone
+and pursue the remaining item. Stage 3 then presents the original two-item
+problem with neither item initially delivered.
+
+Normal training selects a completed earlier stage for 40% of episodes. If a
+held-out evaluation finds an earlier stage below 80% success, training switches
+exclusively to the earliest regressed stage until all preceding stages recover.
+Override these defaults with `--previous-stage-probability` and
+`--retention-threshold`.
+
+Two distinct checkpoints are written:
+
+- `artifacts/shared_mlp_best.pt` is the best model-only inference checkpoint;
+  its JSON metadata contains the held-out results.
+- `artifacts/shared_mlp_latest.pt` is atomically replaced after every completed
+  optimizer update and contains the model, Adam state, random-generator state,
+  curriculum position, counters, and recovery state needed for continuation.
+
+At the end of every training invocation, including a graceful Ctrl+C, the best
+model is also published as an immutable model/manifest pair under
+`controllers/`. This is separate from both mutable files above. Use
+`--no-publish-controller` to disable publication, `--controller-name NAME` to
+add a readable label, or `--controllers-dir PATH` to use another catalog.
+Identical model bytes are deduplicated.
+
+Warm-start the new curriculum from an existing model-only checkpoint:
+
+```powershell
+.\.venv\Scripts\python.exe examples\train_mlp.py train `
+  --initialize-from artifacts\shared_mlp_best.pt
+```
+
+Continue a later run exactly from its saved optimizer boundary:
+
+```powershell
+.\.venv\Scripts\python.exe examples\train_mlp.py train `
+  --resume-from artifacts\shared_mlp_latest.pt
+```
+
+Resume requires the same architecture, encoding/action versions, curriculum,
+objective weights, and training-critical options. With the same Torch version
+and device type, continuation from the boundary is numerically exact; changing
+device type can introduce floating-point differences. Passing an old
+model-only file to `--resume-from` still warm-starts with a warning, but
+`--initialize-from` is clearer.
+
+The route-and-delivery objective and protected-pickup mask have compatibility
+schemas. Existing catalog models remain usable for inference, but an older
+full training bundle cannot be resumed exactly under the changed reward,
+mask, or curriculum. Start the first protected-policy five-hour run from
+random weights with distinct artifact names:
+
+```powershell
+.\.venv\Scripts\python.exe examples\train_mlp.py train `
+  --minutes 300 `
+  --checkpoint artifacts\shared_mlp_protected_v3_best.pt `
+  --latest-checkpoint artifacts\shared_mlp_protected_v3_latest.pt `
+  --controller-name protected_route_v3
+```
+
+Do not add `--resume-from` or `--initialize-from` to that first revised run.
+Later, resume this new run with
+`--resume-from artifacts\shared_mlp_protected_v3_latest.pt` and the same
+training-critical options.
+
+Publish an existing model-only best checkpoint without retraining:
+
+```powershell
+.\.venv\Scripts\python.exe examples\train_mlp.py controllers publish `
+  --checkpoint artifacts\shared_mlp_best.pt `
+  --name my_controller
+```
+
+Each committed catalog entry has a uniquely named `.pt` file and matching
+`.controller.json` manifest containing its persistent run ID, versions,
+curriculum, objective configuration, validation result, counters, and SHA-256.
+Qualified entries show their qualified stage; other usable entries are clearly
+marked **Unqualified**. The manifest is written last, so incomplete packages
+are not discovered. Corrupt, incompatible, missing, path-escaping, or
+checksum-mismatched entries are skipped with a concise warning.
+
+Evaluate the best checkpoint greedily and write full per-episode metrics with:
+
+```bash
+python examples/train_mlp.py evaluate \
+  --checkpoint artifacts/shared_mlp_best.pt \
+  --report artifacts/evaluation.json
+```
+
+Run the saved controller greedily and visualize the same fixed-slot episode
+through the read-only Pygame renderer:
+
+```bash
+python examples/visualize_mlp_controller.py \
+  --checkpoint artifacts/shared_mlp_protected_v3_best.pt \
+  --stage 1 \
+  --inspect-robot robot_1 \
+  --trace-report artifacts/protected_v3_trace.json
+```
+
+The default seed is the first held-out seed for the selected stage. Close the
+window or press Escape when finished. The side panel and optional JSON trace
+show the selected action, detached masked probabilities, entropy, route and
+delivery state, and every step-reward component. Add `--stochastic` to sample
+commands, or `--headless` to exercise the identical controller loop without
+Pygame.
+
+The trainer uses parameter-sharing episodic REINFORCE, one team reward per
+world step, and the sum of the active robots' log probabilities for the joint
+command. Its default `gamma` is one. Route progress is dense and delivery
+credit is sparse; both are signed, cycle-neutral potentials. There is no
+standalone pickup/drop bonus. Ordinary visual and headless simulation
+composition also stops issuing new forward steps once every item is
+simultaneously delivered, while replay and Back remain available in Pygame.
 
 ## Tests
 

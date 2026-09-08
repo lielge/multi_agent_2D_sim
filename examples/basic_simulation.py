@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import math
+from pathlib import Path
 from collections.abc import Sequence
+import sys
 
 from multi_agent_sim import (
     ActionBatteryCosts,
@@ -12,6 +14,8 @@ from multi_agent_sim import (
     SimulationSession,
     SimulationWorld,
     create_initial_scenario,
+    create_world_observation,
+    delivery_status,
 )
 
 
@@ -110,6 +114,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="show or hide robot ID labels",
     )
+    parser.add_argument(
+        "--controllers-dir", type=Path, default=Path("controllers")
+    )
+    parser.add_argument(
+        "--controller",
+        help="controller key or saved controller ID to assign to every robot",
+    )
+    parser.add_argument(
+        "--controller-device",
+        choices=("cpu", "auto", "cuda"),
+        default="cpu",
+    )
     return parser
 
 
@@ -130,6 +146,45 @@ def run_demo(args: argparse.Namespace) -> SimulationWorld | None:
         wait=args.wait_cost,
         drop=args.drop_cost,
     )
+    from multi_agent_sim.saved_mlp_controllers import (
+        create_registry_with_saved_controllers,
+    )
+
+    def load_registry():
+        result = create_registry_with_saved_controllers(
+            directory=args.controllers_dir,
+            device=args.controller_device,
+        )
+        for warning in result.warnings:
+            print(f"Controller catalog warning: {warning}", file=sys.stderr)
+        return result
+
+    registry_result = load_registry()
+    controller_key = args.controller
+    if (
+        controller_key is not None
+        and controller_key not in registry_result.registry.keys
+    ):
+        matches = tuple(
+            entry.manifest.registry_key
+            for entry in registry_result.catalog.entries
+            if entry.manifest.controller_id == controller_key
+        )
+        if not matches:
+            choices = ", ".join(registry_result.registry.keys)
+            raise SystemExit(
+                f"unknown --controller {controller_key!r}; available keys: {choices}"
+            )
+        controller_key = matches[0]
+    if controller_key is not None:
+        definition = registry_result.registry.definition(controller_key)
+        if not definition.supports_scenario(args.robots, args.items):
+            raise SystemExit(
+                f"controller {definition.display_name!r} supports at most "
+                f"{definition.max_robots} robots and {definition.max_items} items"
+            )
+        if definition.max_robots is not None and args.steps <= 0:
+            raise SystemExit("saved neural controllers require --steps to be positive")
 
     if not args.headless:
         if not 1 <= args.fps <= 30:
@@ -153,6 +208,9 @@ def run_demo(args: argparse.Namespace) -> SimulationWorld | None:
             pickup_cost=action_battery_costs.pickup,
             wait_cost=action_battery_costs.wait,
             drop_cost=action_battery_costs.drop,
+            controller_registry=registry_result.registry,
+            controller_registry_loader=lambda: load_registry().registry,
+            initial_controller_key=controller_key,
         ).run()
         if world is not None:
             _print_summary(world)
@@ -165,9 +223,16 @@ def run_demo(args: argparse.Namespace) -> SimulationWorld | None:
         num_items=args.items,
         seed=args.seed,
         action_battery_costs=action_battery_costs,
+        controller_keys=(controller_key,) * args.robots if controller_key else None,
     )
-    session = SimulationSession(scenario, max_steps=args.steps)
+    session = SimulationSession(
+        scenario,
+        max_steps=args.steps,
+        controller_registry=registry_result.registry,
+    )
     for _ in range(args.steps):
+        if delivery_status(create_world_observation(session.world)).success:
+            break
         session.step_forward()
 
     world = session.world
